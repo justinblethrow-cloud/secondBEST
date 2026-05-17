@@ -172,3 +172,126 @@ pub fn get_matches(
 
     res
 }
+
+/// Get all A/C/G/T k-mers fully contained in a one-indexed [start, end) range.
+///
+/// The feature value is the k-mer sequence in read orientation. For alignments
+/// on the reverse strand, this means the reverse complement of the reference
+/// k-mer is reported.
+pub fn get_kmers(
+    seq: &fasta::record::Sequence,
+    start: usize,
+    end: usize,
+    kmer_len: usize,
+    strand_rev: bool,
+) -> Vec<FeatureInterval> {
+    let mut res = Vec::new();
+
+    if kmer_len == 0 || end <= start {
+        return res;
+    }
+
+    let bounded_end = end.min(seq.len() + 1);
+    if bounded_end <= start || bounded_end - start < kmer_len {
+        return res;
+    }
+
+    let last_start = bounded_end - kmer_len;
+    for i in start..=last_start {
+        let kmer_start = i - 1;
+        let kmer_end = kmer_start + kmer_len;
+        let kmer = &seq.as_ref()[kmer_start..kmer_end];
+
+        if !kmer.iter().all(|&c| is_acgt(c)) {
+            continue;
+        }
+
+        let val = if strand_rev {
+            reverse_complement(kmer)
+        } else {
+            uppercase_dna(kmer)
+        };
+
+        res.push(FeatureInterval {
+            start: i,
+            stop: i + kmer_len,
+            val,
+        });
+    }
+
+    res
+}
+
+fn is_acgt(c: u8) -> bool {
+    matches!(c.to_ascii_uppercase(), b'A' | b'C' | b'G' | b'T')
+}
+
+fn uppercase_dna(seq: &[u8]) -> String {
+    let bytes = seq.iter().map(|c| c.to_ascii_uppercase()).collect();
+    String::from_utf8(bytes).unwrap()
+}
+
+fn reverse_complement(seq: &[u8]) -> String {
+    let bytes = seq
+        .iter()
+        .rev()
+        .map(|c| COMPLEMENT[c.to_ascii_uppercase() as usize])
+        .collect();
+    String::from_utf8(bytes).unwrap()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn seq(s: &str) -> fasta::record::Sequence {
+        fasta::record::Sequence::from(s.as_bytes().to_vec())
+    }
+
+    fn interval_tuples(intervals: Vec<FeatureInterval>) -> Vec<(usize, usize, String)> {
+        intervals
+            .into_iter()
+            .map(|i| (i.start, i.stop, i.val))
+            .collect()
+    }
+
+    #[test]
+    fn get_kmers_reports_forward_kmers_in_half_open_range() {
+        let actual = interval_tuples(get_kmers(&seq("ACGTAC"), 2, 6, 3, false));
+
+        assert_eq!(
+            actual,
+            vec![(2, 5, "CGT".to_string()), (3, 6, "GTA".to_string())]
+        );
+    }
+
+    #[test]
+    fn get_kmers_reports_reverse_complement_for_reverse_strand() {
+        let actual = interval_tuples(get_kmers(&seq("ACGTAC"), 1, 5, 3, true));
+
+        assert_eq!(
+            actual,
+            vec![(1, 4, "CGT".to_string()), (2, 5, "ACG".to_string())]
+        );
+    }
+
+    #[test]
+    fn get_kmers_skips_ambiguous_bases_and_uppercases_output() {
+        let actual = interval_tuples(get_kmers(&seq("ACNTac"), 1, 7, 3, false));
+
+        assert_eq!(actual, vec![(4, 7, "TAC".to_string())]);
+    }
+
+    #[test]
+    fn get_kmers_returns_empty_for_zero_or_too_long_kmer_lengths() {
+        assert!(get_kmers(&seq("ACGT"), 1, 5, 0, false).is_empty());
+        assert!(get_kmers(&seq("ACGT"), 1, 3, 3, false).is_empty());
+    }
+
+    #[test]
+    fn get_kmers_clamps_ranges_to_reference_length() {
+        let actual = interval_tuples(get_kmers(&seq("ACGT"), 3, 20, 2, false));
+
+        assert_eq!(actual, vec![(3, 5, "GT".to_string())]);
+    }
+}

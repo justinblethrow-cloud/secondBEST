@@ -21,7 +21,7 @@ use std::fs::File;
 use std::io::prelude::*;
 use std::io::BufReader;
 
-use fxhash::{FxHashMap, FxHashSet};
+use fxhash::FxHashMap;
 
 use rust_lapper::{Interval, Lapper};
 
@@ -29,14 +29,12 @@ pub type FeatureInterval = Interval<usize, String>;
 
 pub struct Intervals {
     intervals: FxHashMap<String, Lapper<usize, String>>,
-    pub features: FxHashSet<String>,
 }
 
 impl Intervals {
     /// Create a new collection of intervals from a BED file.
     pub fn new(bed_path: &str) -> Self {
         let mut intervals = FxHashMap::default();
-        let mut features = FxHashSet::default();
         let reader = BufReader::new(File::open(bed_path).expect("BED file not found."));
 
         for line in reader.lines() {
@@ -56,7 +54,6 @@ impl Intervals {
                     stop,
                     val: feature.clone(),
                 });
-            features.insert(feature);
         }
 
         Self {
@@ -64,7 +61,6 @@ impl Intervals {
                 .into_iter()
                 .map(|(k, v)| (k, Lapper::new(v)))
                 .collect(),
-            features,
         }
     }
 

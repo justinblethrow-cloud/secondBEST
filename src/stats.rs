@@ -29,6 +29,7 @@ use fxhash::FxHashMap;
 
 use std::fmt;
 use std::str::FromStr;
+use std::sync::OnceLock;
 
 use crate::bed::*;
 
@@ -241,10 +242,21 @@ pub struct FeatureStats {
     pub hp_ins: usize,
     pub hp_del: usize,
     pub total_qual_error: f64,
-    pub q_score_stats: QualScoreStats,
+    pub q_score_stats: Option<QualScoreStats>,
 }
 
 impl FeatureStats {
+    pub fn new(track_q_scores: bool) -> Self {
+        Self {
+            q_score_stats: if track_q_scores {
+                Some(QualScoreStats::default())
+            } else {
+                None
+            },
+            ..Default::default()
+        }
+    }
+
     pub fn assign_add(&mut self, o: &Self) {
         self.overlaps += o.overlaps;
         self.identical_overlaps += o.identical_overlaps;
@@ -255,7 +267,17 @@ impl FeatureStats {
         self.hp_ins += o.hp_ins;
         self.hp_del += o.hp_del;
         self.total_qual_error += o.total_qual_error;
-        self.q_score_stats.assign_add(&o.q_score_stats);
+        if let (Some(q_score_stats), Some(other_q_score_stats)) =
+            (&mut self.q_score_stats, &o.q_score_stats)
+        {
+            q_score_stats.assign_add(other_q_score_stats);
+        }
+    }
+
+    pub fn increment_q_score(&mut self, q_score: usize, is_match: bool) {
+        if let Some(ref mut q_score_stats) = self.q_score_stats {
+            q_score_stats.increment(q_score, is_match);
+        }
     }
 
     pub fn num_bases(&self) -> usize {
@@ -282,6 +304,7 @@ impl<'a> AlnStats<'a> {
         reference_seqs: &FxHashMap<String, fasta::Record>,
         r: &bam::lazy::Record,
         intervals: &[&'a FeatureInterval],
+        track_feature_q_scores: bool,
     ) -> Self {
         let chr = references[r.reference_sequence_id().unwrap().unwrap()]
             .name()
@@ -351,7 +374,7 @@ impl<'a> AlnStats<'a> {
         for i in intervals {
             res.feature_stats
                 .entry(&i.val)
-                .or_insert_with(|| FeatureStats::default())
+                .or_insert_with(|| FeatureStats::new(track_feature_q_scores))
                 .overlaps += 1;
         }
 
@@ -405,7 +428,7 @@ impl<'a> AlnStats<'a> {
                                 let stats = res.feature_stats.get_mut(f).unwrap();
                                 stats.matches += 1;
                                 stats.total_qual_error += qual_error;
-                                stats.q_score_stats.increment(q_score as usize, true);
+                                stats.increment_q_score(q_score as usize, true);
                             });
                         } else {
                             res.mismatches += 1;
@@ -414,7 +437,7 @@ impl<'a> AlnStats<'a> {
                                 let stats = res.feature_stats.get_mut(f).unwrap();
                                 stats.mismatches += 1;
                                 stats.total_qual_error += qual_error;
-                                stats.q_score_stats.increment(q_score as usize, false);
+                                stats.increment_q_score(q_score as usize, false);
                             });
                             intervals_have_error(&curr_interval_idxs);
                         }
@@ -611,8 +634,15 @@ pub fn concordance_qv(concordance: f64, has_errors: bool) -> f64 {
     }
 }
 
-fn qual_to_error(q: u8) -> f64 {
-    10.0f64.powf(-(q as f64) / 10.0f64)
+pub(crate) fn qual_to_error(q: u8) -> f64 {
+    static QUAL_TO_ERROR: OnceLock<[f64; 256]> = OnceLock::new();
+    QUAL_TO_ERROR.get_or_init(|| {
+        let mut v = [0.0f64; 256];
+        for (q, e) in v.iter_mut().enumerate() {
+            *e = 10.0f64.powf(-(q as f64) / 10.0f64);
+        }
+        v
+    })[q as usize]
 }
 
 fn error_to_qual(e: f64) -> f64 {

@@ -11,9 +11,11 @@ reference assembly.
 * Bin per read stats to easily examine the distribution of errors for certain
   types of reads
 * Stats for regions specified by intervals (BED file, homopolymer regions,
-  windows etc.)
+  windows, matched sequences, k-mers etc.)
+* Dedicated k-mer context summaries and optional position summaries for optimized k-mer runs
 * Stats for quality scores vs empirical Q-values
-* Multithreading for speed
+* Optional suppression of per-feature quality score stats for large feature sets
+* Multithreading for speed, with batched record processing and optional BGZF reader workers
 
 ## Usage
 The [`best` Usage Guide](Usage.md) gives an overview of how to use `best`.
@@ -37,6 +39,11 @@ This will generate stats files with the `prefix/path` prefix.
 This will generate stats files with the `prefix/path` prefix.
 
 The built binary is located at `target/release/best`.
+
+### Benchmarking
+Use `scripts/benchmark_kmer.py` to benchmark k-mer modes across thread,
+record-batch, and BAM-reader settings. The full usage guide includes an example
+matrix and the current recommended high-core setting.
 
 ### Formatting
 ```

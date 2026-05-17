@@ -57,6 +57,13 @@ impl YieldSummary {
             }
         }
     }
+
+    pub fn assign_add(&mut self, o: &Self) {
+        self.q_yield.iter_mut().zip(&o.q_yield).for_each(|(q, o)| {
+            q.0 += o.0;
+            q.1 += o.1;
+        });
+    }
 }
 
 impl fmt::Display for YieldSummary {
@@ -125,6 +132,19 @@ impl IdentitySummary {
         self.gc_del += aln_stats.gc_del;
         self.num_reads += 1;
     }
+
+    pub fn assign_add(&mut self, o: &Self) {
+        self.total_alns += o.total_alns;
+        self.matches += o.matches;
+        self.mismatches += o.mismatches;
+        self.non_hp_ins += o.non_hp_ins;
+        self.non_hp_del += o.non_hp_del;
+        self.hp_ins += o.hp_ins;
+        self.hp_del += o.hp_del;
+        self.gc_ins += o.gc_ins;
+        self.gc_del += o.gc_del;
+        self.num_reads += o.num_reads;
+    }
 }
 
 impl fmt::Display for IdentitySummary {
@@ -159,16 +179,18 @@ impl fmt::Display for IdentitySummary {
 pub struct FeatureSummary {
     name_column: Option<String>,
     feature_stats: FxHashMap<String, FeatureStats>,
+    track_q_scores: bool,
 }
 
 impl FeatureSummary {
-    pub fn new(mut name_column: Option<String>) -> Self {
+    pub fn new_with_q_scores(mut name_column: Option<String>, track_q_scores: bool) -> Self {
         if let Some(ref mut name) = name_column {
             name.push(',');
         }
         Self {
             name_column,
             feature_stats: FxHashMap::default(),
+            track_q_scores,
         }
     }
 
@@ -180,7 +202,16 @@ impl FeatureSummary {
         for (&k, v) in &aln_stats.feature_stats {
             self.feature_stats
                 .entry(k.to_owned())
-                .or_insert_with(|| FeatureStats::default())
+                .or_insert_with(|| FeatureStats::new(self.track_q_scores))
+                .assign_add(v);
+        }
+    }
+
+    pub fn assign_add(&mut self, o: &Self) {
+        for (k, v) in &o.feature_stats {
+            self.feature_stats
+                .entry(k.to_owned())
+                .or_insert_with(|| FeatureStats::new(self.track_q_scores))
                 .assign_add(v);
         }
     }
@@ -239,6 +270,12 @@ impl CigarLenSummary {
         }
 
         for (&k, v) in &aln_stats.cigar_len_stats {
+            *self.cigar_len_stats.entry(k).or_insert(0) += v;
+        }
+    }
+
+    pub fn assign_add(&mut self, o: &Self) {
+        for (&k, v) in &o.cigar_len_stats {
             *self.cigar_len_stats.entry(k).or_insert(0) += v;
         }
     }
@@ -311,6 +348,20 @@ impl BinSummary {
                 .assign_add(&bin_stats);
         });
     }
+
+    pub fn assign_add(&mut self, o: &Self) {
+        self.bin_maps
+            .iter_mut()
+            .zip(&o.bin_maps)
+            .for_each(|((_, bin_map), (_, other_bin_map))| {
+                for (bin, stats) in other_bin_map {
+                    bin_map
+                        .entry(bin.to_owned())
+                        .or_insert_with(|| BinStats::default())
+                        .assign_add(stats);
+                }
+            });
+    }
 }
 
 impl fmt::Display for BinSummary {
@@ -357,10 +408,14 @@ impl fmt::Display for BinSummary {
 pub struct QualScoreSummary {
     name_column: Option<String>,
     feature_qual: FxHashMap<String, QualScoreStats>,
+    include_feature_scores: bool,
 }
 
 impl QualScoreSummary {
-    pub fn new(mut name_column: Option<String>) -> Self {
+    pub fn new_with_feature_scores(
+        mut name_column: Option<String>,
+        include_feature_scores: bool,
+    ) -> Self {
         if let Some(ref mut name) = name_column {
             name.push(',');
         }
@@ -369,6 +424,7 @@ impl QualScoreSummary {
         Self {
             name_column,
             feature_qual,
+            include_feature_scores,
         }
     }
 
@@ -382,11 +438,24 @@ impl QualScoreSummary {
             .unwrap()
             .assign_add(&aln_stats.q_score_stats);
 
-        for (&k, v) in &aln_stats.feature_stats {
+        if self.include_feature_scores {
+            for (&k, v) in &aln_stats.feature_stats {
+                if let Some(ref q_score_stats) = v.q_score_stats {
+                    self.feature_qual
+                        .entry(k.to_owned())
+                        .or_insert_with(|| QualScoreStats::default())
+                        .assign_add(q_score_stats);
+                }
+            }
+        }
+    }
+
+    pub fn assign_add(&mut self, o: &Self) {
+        for (k, v) in &o.feature_qual {
             self.feature_qual
                 .entry(k.to_owned())
                 .or_insert_with(|| QualScoreStats::default())
-                .assign_add(&v.q_score_stats);
+                .assign_add(v);
         }
     }
 }
