@@ -57,8 +57,13 @@ substitution spectra when advanced k-mer outputs are available. See
 `docs/kmer_exploration.md` for the workflow and output descriptions.
 
 Use `scripts/kmer_explore_figures.py` on an exploration output directory to
-create Nanopore-focused PNG/SVG figures and a Markdown manifest with captions
-and presentation-builder notes.
+create platform-focused PNG/SVG figures and a Markdown manifest with captions
+and presentation-builder notes. The defaults are Nanopore-oriented; set
+`--platform` and `--figure-prefix` for PacBio or other datasets.
+
+Use `scripts/kmer_compare_platforms.py` to compare two exploration directories
+directly. It writes raw and reverse-complement-collapsed hexbin plots of every
+shared k-mer's error rate, plus joined/outlier CSVs for annotation.
 
 ### Formatting
 ```

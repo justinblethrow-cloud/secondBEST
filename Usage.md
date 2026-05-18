@@ -182,12 +182,30 @@ python3 scripts/kmer_explore_figures.py \
     --explore-dir target/tmp/kmer_explore \
     --out-dir target/tmp/kmer_explore/figures \
     --label "ONT simplex chr20 5x k=7" \
+    --platform Nanopore \
+    --figure-prefix nanopore \
     --min-intervals 1000 \
     --top-n 20
 ```
 
 This writes PNG/SVG figures plus `figure_manifest.md` with highlights,
-captions, and notes for building a Nanopore error-context slide deck.
+captions, and notes for building an error-context slide deck. Use `--platform`
+and `--figure-prefix` to label PacBio, Revio, or other datasets.
+
+To compare two platforms or chemistries directly:
+```
+python3 scripts/kmer_compare_platforms.py \
+    --left-dir target/tmp/kmer_simplex/explore \
+    --right-dir target/tmp/kmer_revio/explore \
+    --left-label Simplex \
+    --right-label Revio \
+    --out-dir target/tmp/kmer_platform_compare \
+    --min-intervals 1000
+```
+
+This writes hexbin plots for every shared k-mer and for
+reverse-complement-collapsed contexts, plus joined and outlier CSVs for
+annotating platform-specific contexts.
 
 ## Help Message:
 ```

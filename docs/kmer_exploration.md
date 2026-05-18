@@ -54,6 +54,8 @@ python3 scripts/kmer_explore_figures.py \
     --explore-dir target/tmp/kmer_explore \
     --out-dir target/tmp/kmer_explore/figures \
     --label "ONT simplex chr20 5x k=7" \
+    --platform Nanopore \
+    --figure-prefix nanopore \
     --min-intervals 1000 \
     --top-n 20
 ```
@@ -61,7 +63,33 @@ python3 scripts/kmer_explore_figures.py \
 The figure script writes PNG and SVG versions by default, plus
 `figure_manifest.md` with highlights, captions, and presentation-builder notes.
 Use the PNGs for dense scatter plots; point clouds are rasterized in SVG output
-to keep files small enough for slide tools.
+to keep files small enough for slide tools. The default platform label and
+figure prefix are Nanopore-oriented; set `--platform "PacBio Revio"` and
+`--figure-prefix revio` for Revio/PacBio output.
+
+## Platform Comparison Command
+
+After running `scripts/kmer_explore.py` for two datasets, use
+`scripts/kmer_compare_platforms.py` to make direct k-mer-by-k-mer comparison
+plots:
+
+```bash
+python3 scripts/kmer_compare_platforms.py \
+    --left-dir target/tmp/kmer_simplex/explore \
+    --right-dir target/tmp/kmer_revio/explore \
+    --left-label Simplex \
+    --right-label Revio \
+    --out-dir target/tmp/kmer_platform_compare \
+    --min-intervals 1000 \
+    --top-n 50
+```
+
+The comparison script joins shared k-mers that pass the support threshold in
+both datasets. It writes one hexbin for raw k-mers and one for
+reverse-complement-collapsed contexts, each with an equality diagonal. Points
+below the diagonal have higher error in the left dataset; points above it have
+higher error in the right dataset. Joined and outlier CSVs are written alongside
+the figures so selected contexts can be annotated in a slide or manuscript.
 
 ## Outputs
 
@@ -101,22 +129,39 @@ to keep files small enough for slide tools.
 
 ## Figure Outputs
 
-- `nanopore_context_error_classes`: top reverse-complement-collapsed contexts
+The examples below use the default `nanopore` figure prefix. If
+`--figure-prefix revio` is supplied, the same figures are written with a
+`revio_` prefix.
+
+- `<prefix>_context_error_classes`: top reverse-complement-collapsed contexts
   with stacked mismatch, non-homopolymer indel, and homopolymer indel rates.
-- `nanopore_homopolymer_run_profile`: error rate by homopolymer run length and
+- `<prefix>_homopolymer_run_profile`: error rate by homopolymer run length and
   base, intended to show whether the expected Nanopore homopolymer signal is
   visible.
-- `nanopore_rc_pair_asymmetry`: scatter plot comparing each canonical k-mer
+- `<prefix>_rc_pair_asymmetry`: scatter plot comparing each canonical k-mer
   with its reverse complement.
-- `nanopore_rc_strand_mirror`: support-ranked mirror diagnostic that helps
+- `<prefix>_rc_strand_mirror`: support-ranked mirror diagnostic that helps
   distinguish reverse-complement member differences from ordinary strand bias.
-- `nanopore_quality_calibration`: predicted mean QV vs empirical context QV.
-- `nanopore_motif_enrichment`: model-free motif discovery among high-error
+- `<prefix>_quality_calibration`: predicted mean QV vs empirical context QV.
+- `<prefix>_motif_enrichment`: model-free motif discovery among high-error
   k-mers.
-- `nanopore_substitution_spectrum`: substitution ranking derived from the
+- `<prefix>_substitution_spectrum`: substitution ranking derived from the
   offset-aware substitution table.
-- `nanopore_offset_base_error_heatmap`: compact base-by-offset summary for
+- `<prefix>_offset_base_error_heatmap`: compact base-by-offset summary for
   explaining how the k-mer summaries can be decomposed into positional effects.
+
+## Platform Comparison Outputs
+
+- `platform_kmer_error_hexbin`: raw shared k-mer error-rate hexbin.
+- `platform_rc_collapsed_error_hexbin`: reverse-complement-collapsed shared
+  context error-rate hexbin.
+- `platform_kmer_joined.csv` and `platform_kmer_outliers.csv`: raw k-mer
+  comparison tables.
+- `platform_rc_collapsed_joined.csv` and
+  `platform_rc_collapsed_outliers.csv`: reverse-complement-collapsed comparison
+  tables, including per-error-class event rates when available.
+- `platform_comparison_manifest.md`: compact summary with figure names and
+  presentation-builder notes.
 
 ## Interpretation Notes
 
@@ -135,3 +180,50 @@ than any single chr20 pilot result. A conservative slide sequence is:
 context/error-class enrichment, homopolymer run-length profile,
 reverse-complement pair asymmetry plus strand mirror, quality calibration,
 motif discovery, and substitution spectrum as supporting detail.
+
+## Local 20X Platform Demonstration
+
+A local HPRC HG002 20X demonstration compared Oxford Nanopore Simplex against
+PacBio Revio with `k=7`, `--kmer-position-stats`, and
+`--kmer-advanced-stats`, using `/mnt/datavault/Agentic/BEST/HPRC-HG002/HPRC-HG002.fasta`
+as the reference. The generated outputs were kept under `target/tmp` rather
+than committed to the repository.
+
+Run commands:
+
+```bash
+best -t 32 \
+    --bam-reader-threads 8 \
+    --record-batch-size 64 \
+    --no-per-aln-stats \
+    --no-feature-qual-score-stats \
+    --kmer-position-stats \
+    --kmer-advanced-stats \
+    --intervals-kmer 7 \
+    -- simplex_20X.HPRC_HG002.bam HPRC-HG002.fasta simplex/run
+
+best -t 96 \
+    --bam-reader-threads 16 \
+    --record-batch-size 64 \
+    --no-per-aln-stats \
+    --no-feature-qual-score-stats \
+    --kmer-position-stats \
+    --kmer-advanced-stats \
+    --intervals-kmer 7 \
+    -- revio_all.20X.hprc_hg002.bam HPRC-HG002.fasta revio/run
+```
+
+Observed local timings:
+
+- Simplex 20X: 25:54 wall time, 3049% CPU, 6.7 GiB max RSS.
+- Revio 20X: 4:18 wall time, 8786% CPU, 10.9 GiB max RSS.
+
+The platform comparison joined all 16,384 raw 7-mers and 8,192
+reverse-complement-collapsed contexts at `--min-intervals 1000`. In this local
+run, every shared raw k-mer had a higher Simplex error rate than Revio, and the
+median log2 Revio/Simplex error-rate ratio was `-4.320`. The generated
+presentation outputs are:
+
+- `target/tmp/kmer_simplex20x_hprc_k7_advanced_20260518/figures`
+- `target/tmp/kmer_revio20x_hprc_k7_advanced_20260518/figures`
+- `target/tmp/kmer_platform_compare_simplex20x_revio20x_20260518`

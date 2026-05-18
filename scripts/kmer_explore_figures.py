@@ -12,6 +12,7 @@ import argparse
 import csv
 import math
 import os
+import re
 from collections import defaultdict
 from pathlib import Path
 
@@ -58,6 +59,15 @@ def parse_args() -> argparse.Namespace:
         help="Dataset label used in figure titles and the Markdown manifest",
     )
     parser.add_argument(
+        "--platform",
+        default="Nanopore",
+        help="Sequencing platform label used in the Markdown manifest",
+    )
+    parser.add_argument(
+        "--figure-prefix",
+        help="Prefix for output figure filenames. Defaults to a slug of --platform.",
+    )
+    parser.add_argument(
         "--min-intervals",
         type=int,
         default=1000,
@@ -96,7 +106,17 @@ def parse_args() -> argparse.Namespace:
     args.formats = [item.strip().lower() for item in args.formats.split(",") if item.strip()]
     if not args.formats:
         parser.error("--formats must include at least one format")
+    args.figure_prefix = args.figure_prefix or slugify(args.platform)
     return args
+
+
+def slugify(value: str) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "_", value.lower()).strip("_")
+    return slug or "kmer"
+
+
+def figure_stem(file_prefix: str, name: str) -> str:
+    return f"{file_prefix}_{name}"
 
 
 def read_csv(path: Path) -> list[dict[str, str]]:
@@ -154,6 +174,7 @@ def plot_context_error_classes(
     out_dir: Path,
     formats: list[str],
     label: str,
+    file_prefix: str,
     min_intervals: int,
     top_n: int,
 ) -> tuple[str, list[Path]] | None:
@@ -178,11 +199,14 @@ def plot_context_error_classes(
         xlabel="Error events per k-mer interval",
         ylabel="Canonical k-mer",
     )
-    ax.legend(loc="lower right", frameon=False, fontsize=9)
+    max_total = max(left) if left else 0.0
+    if max_total:
+        ax.set_xlim(right=max_total * 1.08)
+    ax.legend(loc="upper left", bbox_to_anchor=(1.01, 1.0), frameon=False, fontsize=9)
     for idx, row in enumerate(rows):
         total = sum(f(row, column) for column, _, _ in ERROR_CLASS_COLUMNS)
         ax.text(
-            total + max(left) * 0.01,
+            total + max_total * 0.01,
             idx,
             f"{f(row, 'enrichment'):.2f}x",
             va="center",
@@ -192,7 +216,7 @@ def plot_context_error_classes(
 
     return (
         "context_error_classes",
-        save_figure(fig, out_dir, "nanopore_context_error_classes", formats),
+        save_figure(fig, out_dir, figure_stem(file_prefix, "context_error_classes"), formats),
     )
 
 
@@ -201,6 +225,7 @@ def plot_rc_pair_asymmetry(
     out_dir: Path,
     formats: list[str],
     label: str,
+    file_prefix: str,
     min_intervals: int,
     annotate_top: int,
 ) -> tuple[str, list[Path]] | None:
@@ -258,7 +283,7 @@ def plot_rc_pair_asymmetry(
 
     return (
         "rc_pair_asymmetry",
-        save_figure(fig, out_dir, "nanopore_rc_pair_asymmetry", formats),
+        save_figure(fig, out_dir, figure_stem(file_prefix, "rc_pair_asymmetry"), formats),
     )
 
 
@@ -267,6 +292,7 @@ def plot_rc_strand_mirror(
     out_dir: Path,
     formats: list[str],
     label: str,
+    file_prefix: str,
     min_intervals: int,
     top_n: int,
 ) -> tuple[str, list[Path]] | None:
@@ -307,7 +333,7 @@ def plot_rc_strand_mirror(
 
     return (
         "rc_strand_mirror",
-        save_figure(fig, out_dir, "nanopore_rc_strand_mirror", formats),
+        save_figure(fig, out_dir, figure_stem(file_prefix, "rc_strand_mirror"), formats),
     )
 
 
@@ -316,6 +342,7 @@ def plot_quality_calibration(
     out_dir: Path,
     formats: list[str],
     label: str,
+    file_prefix: str,
     min_intervals: int,
     annotate_top: int,
 ) -> tuple[str, list[Path]] | None:
@@ -366,7 +393,7 @@ def plot_quality_calibration(
 
     return (
         "quality_calibration",
-        save_figure(fig, out_dir, "nanopore_quality_calibration", formats),
+        save_figure(fig, out_dir, figure_stem(file_prefix, "quality_calibration"), formats),
     )
 
 
@@ -375,6 +402,7 @@ def plot_homopolymer_profile(
     out_dir: Path,
     formats: list[str],
     label: str,
+    file_prefix: str,
     max_run_length: int,
 ) -> tuple[str, list[Path]] | None:
     if not rows:
@@ -424,7 +452,7 @@ def plot_homopolymer_profile(
     ax.legend(title="Base", frameon=False)
     return (
         "homopolymer_profile",
-        save_figure(fig, out_dir, "nanopore_homopolymer_run_profile", formats),
+        save_figure(fig, out_dir, figure_stem(file_prefix, "homopolymer_run_profile"), formats),
     )
 
 
@@ -433,6 +461,7 @@ def plot_motif_enrichment(
     out_dir: Path,
     formats: list[str],
     label: str,
+    file_prefix: str,
     top_n: int,
 ) -> tuple[str, list[Path]] | None:
     rows = [row for row in rows if i(row, "bad_with_motif") > 0][:top_n]
@@ -459,7 +488,7 @@ def plot_motif_enrichment(
     )
     return (
         "motif_enrichment",
-        save_figure(fig, out_dir, "nanopore_motif_enrichment", formats),
+        save_figure(fig, out_dir, figure_stem(file_prefix, "motif_enrichment"), formats),
     )
 
 
@@ -468,6 +497,7 @@ def plot_offset_base_heatmap(
     out_dir: Path,
     formats: list[str],
     label: str,
+    file_prefix: str,
 ) -> tuple[str, list[Path]] | None:
     rows = [row for row in rows if row.get("kmer_base") in BASES]
     if not rows:
@@ -495,7 +525,7 @@ def plot_offset_base_heatmap(
     cbar.set_label("Error rate (%)")
     return (
         "offset_base_heatmap",
-        save_figure(fig, out_dir, "nanopore_offset_base_error_heatmap", formats),
+        save_figure(fig, out_dir, figure_stem(file_prefix, "offset_base_error_heatmap"), formats),
     )
 
 
@@ -504,6 +534,7 @@ def plot_substitution_spectrum(
     out_dir: Path,
     formats: list[str],
     label: str,
+    file_prefix: str,
 ) -> tuple[str, list[Path]] | None:
     if not rows:
         return None
@@ -542,7 +573,7 @@ def plot_substitution_spectrum(
     )
     return (
         "substitution_spectrum",
-        save_figure(fig, out_dir, "nanopore_substitution_spectrum", formats),
+        save_figure(fig, out_dir, figure_stem(file_prefix, "substitution_spectrum"), formats),
     )
 
 
@@ -571,6 +602,8 @@ def first_supported(
 def write_manifest(
     path: Path,
     label: str,
+    platform: str,
+    figure_prefix: str,
     explore_dir: Path,
     generated: list[tuple[str, list[Path]]],
     inputs: dict[str, list[dict[str, str]]],
@@ -588,9 +621,11 @@ def write_manifest(
         "substitution_spectrum": "Substitution spectrum summarized across offsets from the offset-aware substitution table.",
     }
     lines = [
-        "# Nanopore K-mer Error Context Figures",
+        f"# {platform} K-mer Error Context Figures",
         "",
         f"Dataset: `{label}`",
+        "",
+        f"Platform: `{platform}`",
         "",
         f"Exploration directory: `{explore_dir}`",
         "",
@@ -639,20 +674,20 @@ def write_manifest(
             "",
             "Recommended slide order:",
             "",
-            "1. Start with `nanopore_context_error_classes`: it is the clearest anchor for the biological/chemistry claim that Nanopore errors are sequence-context dependent.",
-            "2. Follow with `nanopore_homopolymer_run_profile`: it connects the top contexts to the expected Nanopore homopolymer mechanism.",
-            "3. Use `nanopore_rc_pair_asymmetry` and `nanopore_rc_strand_mirror` together: the pair scatter shows orientation asymmetry, while the mirror plot checks whether strand alone explains it.",
-            "4. Use `nanopore_quality_calibration` to show that context effects also affect predicted-vs-empirical quality.",
-            "5. Use `nanopore_motif_enrichment` as a discovery slide for CG-containing motifs and other compact signatures.",
-            "6. Use `nanopore_substitution_spectrum` as supporting evidence, not the main slide; substitutions are secondary to indel/homopolymer behavior in this run.",
-            "7. Use `nanopore_offset_base_error_heatmap` as an optional bridge slide when explaining how BEST can move from k-mer-level summaries to offset/base-level summaries.",
+            f"1. Start with `{figure_stem(figure_prefix, 'context_error_classes')}`: it is the clearest anchor for the claim that sequencing errors are sequence-context dependent.",
+            f"2. Follow with `{figure_stem(figure_prefix, 'homopolymer_run_profile')}` to connect top contexts to platform-specific homopolymer behavior.",
+            f"3. Use `{figure_stem(figure_prefix, 'rc_pair_asymmetry')}` and `{figure_stem(figure_prefix, 'rc_strand_mirror')}` together: the pair scatter shows orientation asymmetry, while the mirror plot checks whether strand alone explains it.",
+            f"4. Use `{figure_stem(figure_prefix, 'quality_calibration')}` to show that context effects also affect predicted-vs-empirical quality.",
+            f"5. Use `{figure_stem(figure_prefix, 'motif_enrichment')}` as a discovery slide for compact sequence signatures.",
+            f"6. Use `{figure_stem(figure_prefix, 'substitution_spectrum')}` as supporting detail unless substitution bias is the dominant platform signal.",
+            f"7. Use `{figure_stem(figure_prefix, 'offset_base_error_heatmap')}` as an optional bridge slide when explaining how BEST can move from k-mer-level summaries to offset/base-level summaries.",
             "",
             "Slide design notes:",
             "",
             "- Prefer PNGs for dense scatter plots; their SVGs intentionally rasterize point clouds to keep file sizes manageable.",
             "- Keep the dataset label in a subtitle if the deck has its own title hierarchy; the generated titles can be shortened in the slide tool.",
-            "- Avoid overclaiming from the chr20 5x example alone. Phrase it as a demonstration of the feature set and a pilot error-context profile.",
-            "- Good first proof statement: BEST recovers known Nanopore-like homopolymer signal, then adds reverse-complement and motif diagnostics that expose additional context asymmetries.",
+            "- Avoid overclaiming from one dataset alone. Phrase single-run results as a demonstration of the feature set and a pilot error-context profile.",
+            "- Good first proof statement: BEST recovers platform-specific homopolymer/context signal, then adds reverse-complement and motif diagnostics that expose additional context asymmetries.",
         ]
     )
 
@@ -671,6 +706,7 @@ def main() -> int:
             out_dir,
             args.formats,
             args.label,
+            args.figure_prefix,
             args.min_intervals,
             args.top_n,
         ),
@@ -679,6 +715,7 @@ def main() -> int:
             out_dir,
             args.formats,
             args.label,
+            args.figure_prefix,
             args.min_intervals,
             args.annotate_top,
         ),
@@ -687,6 +724,7 @@ def main() -> int:
             out_dir,
             args.formats,
             args.label,
+            args.figure_prefix,
             args.min_intervals,
             args.top_n,
         ),
@@ -695,6 +733,7 @@ def main() -> int:
             out_dir,
             args.formats,
             args.label,
+            args.figure_prefix,
             args.min_intervals,
             args.annotate_top,
         ),
@@ -703,6 +742,7 @@ def main() -> int:
             out_dir,
             args.formats,
             args.label,
+            args.figure_prefix,
             args.max_run_length,
         ),
         plot_offset_base_heatmap(
@@ -710,12 +750,14 @@ def main() -> int:
             out_dir,
             args.formats,
             args.label,
+            args.figure_prefix,
         ),
         plot_motif_enrichment(
             inputs["motif_enrichment"],
             out_dir,
             args.formats,
             args.label,
+            args.figure_prefix,
             args.top_n,
         ),
         plot_substitution_spectrum(
@@ -723,11 +765,21 @@ def main() -> int:
             out_dir,
             args.formats,
             args.label,
+            args.figure_prefix,
         ),
     ]
     generated = [item for item in plotters if item is not None]
     manifest = out_dir / "figure_manifest.md"
-    write_manifest(manifest, args.label, explore_dir, generated, inputs, args.min_intervals)
+    write_manifest(
+        manifest,
+        args.label,
+        args.platform,
+        args.figure_prefix,
+        explore_dir,
+        generated,
+        inputs,
+        args.min_intervals,
+    )
 
     for _, paths in generated:
         for path in paths:
