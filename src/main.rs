@@ -52,7 +52,10 @@ const YIELD_STATS_NAME: &str = "summary_yield_stats.csv";
 const IDENTITY_STATS_NAME: &str = "summary_identity_stats.csv";
 const FEATURE_STATS_NAME: &str = "summary_feature_stats.csv";
 const KMER_STATS_NAME: &str = "summary_kmer_stats.csv";
+const KMER_LENGTH_STATS_NAME: &str = "summary_kmer_length_stats.csv";
+const KMER_CONTEXT_STATS_NAME: &str = "summary_kmer_context_stats.csv";
 const KMER_POSITION_STATS_NAME: &str = "summary_kmer_position_stats.csv";
+const KMER_POSITION_PROFILE_STATS_NAME: &str = "summary_kmer_position_profile_stats.csv";
 const CIGAR_STATS_NAME: &str = "summary_cigar_stats.csv";
 const BIN_STATS_NAME: &str = "summary_bin_stats.csv";
 const QUAL_SCORE_STATS_NAME: &str = "summary_qual_score_stats.csv";
@@ -223,11 +226,18 @@ fn run(
     if let Some(ref k) = summaries.kmer_summary {
         write_summary(k.feature_summary(), &stats_prefix, FEATURE_STATS_NAME);
         write_summary(k.kmer_summary(), &stats_prefix, KMER_STATS_NAME);
+        write_summary(k.length_summary(), &stats_prefix, KMER_LENGTH_STATS_NAME);
+        write_summary(k.context_summary(), &stats_prefix, KMER_CONTEXT_STATS_NAME);
         if kmer_position_stats {
             write_summary(
                 k.position_summary(),
                 &stats_prefix,
                 KMER_POSITION_STATS_NAME,
+            );
+            write_summary(
+                k.position_profile_summary(),
+                &stats_prefix,
+                KMER_POSITION_PROFILE_STATS_NAME,
             );
         }
     }

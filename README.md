@@ -42,7 +42,9 @@ The built binary is located at `target/release/best`.
 
 ### Benchmarking
 Use `scripts/benchmark_kmer.py` to benchmark k-mer modes across thread,
-record-batch, and BAM-reader settings. The full usage guide includes an example
+record-batch, and BAM-reader settings. The script writes raw CSV results plus
+JSON and Markdown reports with repeat medians, peak memory, output-signature
+checks, and candidate proof statements. The full usage guide includes an example
 matrix and the current recommended high-core setting.
 
 ### Formatting

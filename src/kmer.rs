@@ -10,7 +10,7 @@
 //! Position-level summaries are optional because they multiply the number of
 //! counters by k and add work to every overlapping k-mer update.
 
-use std::fmt;
+use std::{collections::BTreeMap, fmt};
 
 use fxhash::FxHashMap;
 use noodles::{bam, core::Position, fasta, sam};
@@ -81,13 +81,17 @@ struct KmerPositionStats {
 }
 
 impl KmerPositionStats {
-    fn assign_add(&mut self, o: Self) {
+    fn assign_add_ref(&mut self, o: &Self) {
         self.mismatches += o.mismatches;
         self.non_hp_ins += o.non_hp_ins;
         self.non_hp_del += o.non_hp_del;
         self.hp_ins += o.hp_ins;
         self.hp_del += o.hp_del;
         self.skips += o.skips;
+    }
+
+    fn assign_add(&mut self, o: Self) {
+        self.assign_add_ref(&o);
     }
 
     fn num_errors(&self) -> usize {
@@ -157,6 +161,27 @@ pub struct KmerSummary {
     dense_kmer_index: FxHashMap<usize, Vec<usize>>,
     kmer_stats: Vec<(KmerKey, KmerStats)>,
     track_position_stats: bool,
+}
+
+struct KmerContextAggregate {
+    kmers: usize,
+    stats: FeatureStats,
+}
+
+impl KmerContextAggregate {
+    fn new() -> Self {
+        Self {
+            kmers: 0,
+            stats: FeatureStats::new(false),
+        }
+    }
+}
+
+#[derive(Default)]
+struct KmerPositionProfileAggregate {
+    kmers: usize,
+    intervals: usize,
+    stats: KmerPositionStats,
 }
 
 impl KmerSummary {
@@ -564,8 +589,20 @@ impl KmerSummary {
         KmerStatsSummary { summary: self }
     }
 
+    pub fn length_summary(&self) -> KmerLengthSummary {
+        KmerLengthSummary { summary: self }
+    }
+
+    pub fn context_summary(&self) -> KmerContextSummary {
+        KmerContextSummary { summary: self }
+    }
+
     pub fn position_summary(&self) -> KmerPositionSummary {
         KmerPositionSummary { summary: self }
+    }
+
+    pub fn position_profile_summary(&self) -> KmerPositionProfileSummary {
+        KmerPositionProfileSummary { summary: self }
     }
 
     fn get_contexts(
@@ -669,8 +706,41 @@ pub struct KmerStatsSummary<'a> {
     summary: &'a KmerSummary,
 }
 
+pub struct KmerLengthSummary<'a> {
+    summary: &'a KmerSummary,
+}
+
+pub struct KmerContextSummary<'a> {
+    summary: &'a KmerSummary,
+}
+
 pub struct KmerPositionSummary<'a> {
     summary: &'a KmerSummary,
+}
+
+pub struct KmerPositionProfileSummary<'a> {
+    summary: &'a KmerSummary,
+}
+
+fn write_aggregate_metrics(f: &mut fmt::Formatter, stats: &FeatureStats) -> fmt::Result {
+    let per_interval = |x| (x as f64) / (stats.overlaps as f64);
+    let id = stats.identity();
+    write!(
+        f,
+        "{},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6}",
+        stats.overlaps,
+        per_interval(stats.identical_overlaps),
+        id,
+        concordance_qv(id, id != 1.0),
+        stats.mean_qual(),
+        per_interval(stats.num_bases()),
+        per_interval(stats.matches),
+        per_interval(stats.mismatches),
+        per_interval(stats.non_hp_ins),
+        per_interval(stats.non_hp_del),
+        per_interval(stats.hp_ins),
+        per_interval(stats.hp_del)
+    )
 }
 
 impl fmt::Display for KmerFeatureSummary<'_> {
@@ -758,6 +828,73 @@ impl fmt::Display for KmerStatsSummary<'_> {
     }
 }
 
+impl fmt::Display for KmerLengthSummary<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        writeln!(f, "{}kmer_len,kmers,intervals,identical_intervals,identity,identity_qv,mean_qual,bases_per_interval,matches_per_interval,mismatches_per_interval,non_hp_ins_per_interval,non_hp_del_per_interval,hp_ins_per_interval,hp_del_per_interval", if self.summary.name_column.is_some() { "name," } else { "" })?;
+        let mut rows: BTreeMap<usize, KmerContextAggregate> = BTreeMap::new();
+        for ((k, _bits), stats) in &self.summary.kmer_stats {
+            let row = rows.entry(*k).or_insert_with(KmerContextAggregate::new);
+            row.kmers += 1;
+            row.stats.assign_add(&stats.aggregate);
+        }
+
+        for (kmer_len, row) in rows {
+            write!(
+                f,
+                "{}{},{},",
+                self.summary
+                    .name_column
+                    .as_ref()
+                    .map(|n| n.as_str())
+                    .unwrap_or(""),
+                kmer_len,
+                row.kmers
+            )?;
+            write_aggregate_metrics(f, &row.stats)?;
+            writeln!(f)?;
+        }
+
+        Ok(())
+    }
+}
+
+impl fmt::Display for KmerContextSummary<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        writeln!(f, "{}kmer_len,context_type,context_value,kmers,intervals,identical_intervals,identity,identity_qv,mean_qual,bases_per_interval,matches_per_interval,mismatches_per_interval,non_hp_ins_per_interval,non_hp_del_per_interval,hp_ins_per_interval,hp_del_per_interval", if self.summary.name_column.is_some() { "name," } else { "" })?;
+        let mut rows: BTreeMap<(usize, String, String), KmerContextAggregate> = BTreeMap::new();
+        for ((k, bits), stats) in &self.summary.kmer_stats {
+            let kmer = decode_kmer(*k, *bits);
+            for (context_type, context_value) in kmer_contexts(&kmer) {
+                let row = rows
+                    .entry((*k, context_type.to_string(), context_value))
+                    .or_insert_with(KmerContextAggregate::new);
+                row.kmers += 1;
+                row.stats.assign_add(&stats.aggregate);
+            }
+        }
+
+        for ((kmer_len, context_type, context_value), row) in rows {
+            write!(
+                f,
+                "{}{},{},{},{},",
+                self.summary
+                    .name_column
+                    .as_ref()
+                    .map(|n| n.as_str())
+                    .unwrap_or(""),
+                kmer_len,
+                context_type,
+                context_value,
+                row.kmers
+            )?;
+            write_aggregate_metrics(f, &row.stats)?;
+            writeln!(f)?;
+        }
+
+        Ok(())
+    }
+}
+
 impl fmt::Display for KmerPositionSummary<'_> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         writeln!(f, "{}kmer_len,kmer,offset,kmer_base,intervals,identity,identity_qv,matches,mismatches,non_hp_ins,non_hp_del,hp_ins,hp_del,skips,error_rate", if self.summary.name_column.is_some() { "name," } else { "" })?;
@@ -807,6 +944,127 @@ impl fmt::Display for KmerPositionSummary<'_> {
         }
 
         Ok(())
+    }
+}
+
+impl fmt::Display for KmerPositionProfileSummary<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        writeln!(f, "{}kmer_len,offset,kmer_base,kmers,intervals,identity,identity_qv,matches,mismatches,non_hp_ins,non_hp_del,hp_ins,hp_del,skips,error_rate", if self.summary.name_column.is_some() { "name," } else { "" })?;
+        let mut rows: BTreeMap<(usize, usize, String), KmerPositionProfileAggregate> =
+            BTreeMap::new();
+
+        for ((k, bits), kmer_stats) in &self.summary.kmer_stats {
+            let kmer = decode_kmer(*k, *bits);
+            for (offset, stats) in kmer_stats.positions.iter().enumerate() {
+                let base = (kmer.as_bytes()[offset] as char).to_string();
+                for key_base in ["*".to_string(), base] {
+                    let row = rows.entry((*k, offset, key_base)).or_default();
+                    row.kmers += 1;
+                    row.intervals += kmer_stats.aggregate.overlaps;
+                    row.stats.assign_add_ref(stats);
+                }
+            }
+        }
+
+        for ((kmer_len, offset, kmer_base), row) in rows {
+            let id = row.stats.identity(row.intervals);
+            let matches = row.stats.matches(row.intervals);
+            writeln!(
+                f,
+                "{}{},{},{},{},{},{:.6},{:.6},{},{},{},{},{},{},{},{:.6}",
+                self.summary
+                    .name_column
+                    .as_ref()
+                    .map(|n| n.as_str())
+                    .unwrap_or(""),
+                kmer_len,
+                offset,
+                kmer_base,
+                row.kmers,
+                row.intervals,
+                id,
+                concordance_qv(id, row.stats.num_errors() > 0),
+                matches,
+                row.stats.mismatches,
+                row.stats.non_hp_ins,
+                row.stats.non_hp_del,
+                row.stats.hp_ins,
+                row.stats.hp_del,
+                row.stats.skips,
+                row.stats.error_rate(row.intervals)
+            )?;
+        }
+
+        Ok(())
+    }
+}
+
+fn kmer_contexts(kmer: &str) -> Vec<(&'static str, String)> {
+    let bases = kmer.as_bytes();
+    let gc_count = bases.iter().filter(|&&base| is_gc(base)).count();
+    let mut contexts = vec![
+        ("gc_count", gc_count.to_string()),
+        (
+            "max_homopolymer_run",
+            max_homopolymer_run(bases).to_string(),
+        ),
+        (
+            "reverse_complement_palindrome",
+            is_reverse_complement_palindrome(bases).to_string(),
+        ),
+        (
+            "edge_bases",
+            format!("{}{}", bases[0] as char, bases[bases.len() - 1] as char),
+        ),
+    ];
+
+    if bases.len() % 2 == 1 {
+        contexts.push(("central_base", (bases[bases.len() / 2] as char).to_string()));
+    } else {
+        let mid = bases.len() / 2;
+        contexts.push((
+            "central_dinucleotide",
+            format!("{}{}", bases[mid - 1] as char, bases[mid] as char),
+        ));
+    }
+
+    contexts
+}
+
+fn is_gc(base: u8) -> bool {
+    matches!(base, b'C' | b'G')
+}
+
+fn max_homopolymer_run(bases: &[u8]) -> usize {
+    let mut best = 0;
+    let mut current = 0;
+    let mut prev = None;
+    for &base in bases {
+        if Some(base) == prev {
+            current += 1;
+        } else {
+            current = 1;
+            prev = Some(base);
+        }
+        best = best.max(current);
+    }
+    best
+}
+
+fn is_reverse_complement_palindrome(bases: &[u8]) -> bool {
+    bases
+        .iter()
+        .zip(bases.iter().rev())
+        .all(|(&lhs, &rhs)| complement_base(lhs) == rhs)
+}
+
+fn complement_base(base: u8) -> u8 {
+    match base {
+        b'A' => b'T',
+        b'C' => b'G',
+        b'G' => b'C',
+        b'T' => b'A',
+        _ => base,
     }
 }
 

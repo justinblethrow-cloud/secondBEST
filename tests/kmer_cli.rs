@@ -117,8 +117,20 @@ fn intervals_kmer_cli_writes_feature_summary() -> Result<(), Box<dyn Error>> {
         "{}.summary_kmer_stats.csv",
         output_prefix_no_feature_qual.display()
     ));
+    let kmer_length_summary_path = PathBuf::from(format!(
+        "{}.summary_kmer_length_stats.csv",
+        output_prefix_no_feature_qual.display()
+    ));
+    let kmer_context_summary_path = PathBuf::from(format!(
+        "{}.summary_kmer_context_stats.csv",
+        output_prefix_no_feature_qual.display()
+    ));
     let kmer_position_summary_path = PathBuf::from(format!(
         "{}.summary_kmer_position_stats.csv",
+        output_prefix_no_feature_qual.display()
+    ));
+    let kmer_position_profile_summary_path = PathBuf::from(format!(
+        "{}.summary_kmer_position_profile_stats.csv",
         output_prefix_no_feature_qual.display()
     ));
     let feature_summary = fs::read_to_string(feature_summary_path)?;
@@ -133,7 +145,21 @@ fn intervals_kmer_cli_writes_feature_summary() -> Result<(), Box<dyn Error>> {
     assert_eq!(kmer_rows["GTA"].intervals, 2);
     assert_eq!(kmer_rows["TAC"].intervals, 2);
 
+    let kmer_length_summary = fs::read_to_string(kmer_length_summary_path)?;
+    assert!(kmer_length_summary
+        .lines()
+        .any(|line| line.starts_with("3,4,10,1.000000,1.000000")));
+
+    let kmer_context_summary = fs::read_to_string(kmer_context_summary_path)?;
+    assert!(kmer_context_summary
+        .lines()
+        .any(|line| line.starts_with("3,gc_count,1,2,4,")));
+    assert!(kmer_context_summary
+        .lines()
+        .any(|line| line.starts_with("3,gc_count,2,2,6,")));
+
     assert!(!kmer_position_summary_path.exists());
+    assert!(!kmer_position_profile_summary_path.exists());
 
     let output_prefix_kmer_position = tmp.path().join("out_kmer_position");
     let output = Command::new(env!("CARGO_BIN_EXE_best"))
@@ -159,6 +185,10 @@ fn intervals_kmer_cli_writes_feature_summary() -> Result<(), Box<dyn Error>> {
         "{}.summary_kmer_position_stats.csv",
         output_prefix_kmer_position.display()
     ));
+    let kmer_position_profile_summary_path = PathBuf::from(format!(
+        "{}.summary_kmer_position_profile_stats.csv",
+        output_prefix_kmer_position.display()
+    ));
     let kmer_position_summary = fs::read_to_string(kmer_position_summary_path)?;
     let kmer_position_rows = parse_kmer_position_summary(&kmer_position_summary);
     assert_eq!(kmer_position_rows.len(), 12);
@@ -169,6 +199,11 @@ fn intervals_kmer_cli_writes_feature_summary() -> Result<(), Box<dyn Error>> {
     assert_eq!(acg_first_base.identity, "1.000000");
     assert_eq!(acg_first_base.matches, 3);
     assert_eq!(acg_first_base.mismatches, 0);
+
+    let kmer_position_profile_summary = fs::read_to_string(kmer_position_profile_summary_path)?;
+    assert!(kmer_position_profile_summary
+        .lines()
+        .any(|line| line.starts_with("3,0,*,4,10,1.000000")));
 
     let qual_summary = fs::read_to_string(qual_summary_path)?;
     let qual_rows = qual_summary.lines().skip(1).collect::<Vec<_>>();
@@ -248,6 +283,10 @@ fn intervals_kmer_cli_counts_mismatches_and_indels() -> Result<(), Box<dyn Error
         "{}.summary_kmer_position_stats.csv",
         output_prefix.display()
     ));
+    let position_profile_summary_path = PathBuf::from(format!(
+        "{}.summary_kmer_position_profile_stats.csv",
+        output_prefix.display()
+    ));
     let position_summary = fs::read_to_string(position_summary_path)?;
     let position_rows = parse_kmer_position_summary(&position_summary);
 
@@ -268,6 +307,11 @@ fn intervals_kmer_cli_counts_mismatches_and_indels() -> Result<(), Box<dyn Error
     assert_eq!(cgt_insertion.matches, 2);
     assert_eq!(cgt_insertion.non_hp_ins, 1);
     assert_eq!(cgt_insertion.non_hp_del, 0);
+
+    let position_profile_summary = fs::read_to_string(position_profile_summary_path)?;
+    assert!(position_profile_summary
+        .lines()
+        .any(|line| line.starts_with("3,1,C,1,2,0.500000")));
 
     Ok(())
 }

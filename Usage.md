@@ -69,6 +69,15 @@ reverse-complemented k-mer so features are reported in read orientation.
 Because k-mer intervals overlap, k-mer-stratified base counts are context counts
 and are not expected to sum to the genome-wide base counts.
 
+Optimized k-mer runs also write two compact rollup files for interpretation:
+`output.summary_kmer_length_stats.csv` aggregates all observed k-mers by k-mer
+length, and `output.summary_kmer_context_stats.csv` aggregates rows by
+interpretable sequence-context features. The context file currently includes GC
+count, central base or central dinucleotide, maximum homopolymer run length,
+edge bases, and whether the k-mer is a reverse-complement palindrome. Context
+rows are separate stratifications; the same k-mer contributes to multiple
+context types.
+
 Use `--kmer-position-stats` with the optimized k-mer path to also write
 `output.summary_kmer_position_stats.csv`, which breaks errors down by offset
 within each reported k-mer. In this file, `offset` is zero-based within the
@@ -76,7 +85,10 @@ reported read-oriented k-mer and `kmer_base` is the base at that offset.
 Position-level matches are derived from k-mer occurrences after subtracting
 observed mismatches, deletions, and skipped reference positions; insertions are
 attributed to the current reference offset using the same convention as the
-interval feature summary.
+interval feature summary. Position runs also write
+`output.summary_kmer_position_profile_stats.csv`, a compact profile aggregated
+by k-mer length, offset, and base. Rows with `kmer_base` set to `*` aggregate all
+bases at that offset.
 
 For k-mer runs with many features, `summary_qual_score_stats.csv` can become
 large because it reports empirical quality values for each feature by default.
@@ -106,7 +118,10 @@ shared machines.
 ## K-mer Benchmarking
 
 The repository includes `scripts/benchmark_kmer.py` to run reproducible k-mer
-benchmark matrices under `/usr/bin/time -v`. For example:
+benchmark matrices under `/usr/bin/time -v`. The script writes raw per-run CSV
+rows, a JSON summary, and a Markdown report with environment details, median
+timings, peak memory, output-signature checks, and candidate proof statements.
+For example:
 ```
 python3 scripts/benchmark_kmer.py \
     --best target/release/best \
@@ -117,9 +132,15 @@ python3 scripts/benchmark_kmer.py \
     --kmers 7 \
     --record-batch-size 64,128,256,512 \
     --bam-reader-threads 1,2,4,8 \
+    --repeats 3 \
     --no-position-modes \
     --no-baseline
 ```
+
+Use `--checksum-inputs` when preparing final numbers for publication or shared
+reports; it hashes the full BAM and reference so the report identifies the exact
+input bytes. Use `--report-only` to regenerate the Markdown and JSON reports
+from an existing `benchmark_results.csv` without rerunning BEST.
 
 On the available 5.0 GiB HPRC HG002 downsampled BAM, the fastest k7 aggregate
 setting in this matrix was `--record-batch-size 64 --bam-reader-threads 8`.
