@@ -1,0 +1,6 @@
+# Dependencies for scripts/kmer_explore_figures.py and scripts/kmer_compare_platforms.py.
+matplotlib
+numpy
+
+# Optional. Enables row dendrograms in top-k-mer clustered heatmaps.
+scipy

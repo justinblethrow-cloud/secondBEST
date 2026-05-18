@@ -24,13 +24,13 @@ about all Nanopore or PacBio data.
 
 ## Suggested Slide Order
 
-1. Platform overview: use `platform_kmer_error_hexbin`.
+1. Platform overview: use `platform_kmer_pseudo_qv_hexbin`.
    This is the main proof figure. Axes are pseudo-QV, so higher is better. The
    diagonal is equal pseudo-QV. In the current local comparison, the density sits
    above the diagonal, showing higher Revio pseudo-QV across k-mers.
 
 2. Orientation-robust platform overview: use
-   `platform_rc_collapsed_error_hexbin`.
+   `platform_rc_collapsed_pseudo_qv_hexbin`.
    This answers whether the comparison is an artifact of read orientation or
    reverse-complement splitting.
 
@@ -72,9 +72,9 @@ about all Nanopore or PacBio data.
 
 ## Figure-Specific Notes
 
-- `platform_kmer_error_hexbin`: best single-slide platform comparison. Use the
+- `platform_kmer_pseudo_qv_hexbin`: best single-slide platform comparison. Use the
   raw every-k-mer version for the main message.
-- `platform_rc_collapsed_error_hexbin`: use immediately after the raw hexbin if
+- `platform_rc_collapsed_pseudo_qv_hexbin`: use immediately after the raw hexbin if
   the audience may ask about reverse-complement orientation.
 - `platform_kmer_delta_ranked`: use to name concrete raw k-mers with the
   largest platform pseudo-QV differences.
@@ -133,3 +133,4 @@ dataset-specific summary notes.
   a recalibrated base quality model.
 - Reverse-complement-collapsed plots are preferable when the claim should be
   independent of read orientation.
+- For compact methods wording, use `docs/kmer_methods_summary.md`.

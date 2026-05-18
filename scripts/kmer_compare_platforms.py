@@ -7,6 +7,8 @@ import argparse
 import csv
 import math
 import os
+import subprocess
+import sys
 from pathlib import Path
 
 
@@ -113,6 +115,31 @@ def f(row: dict[str, str], key: str, default: float = 0.0) -> float:
 def i(row: dict[str, str], key: str, default: int = 0) -> int:
     value = row.get(key, "")
     return default if value == "" else int(float(value))
+
+
+def format_count(value: int) -> str:
+    if value >= 1_000_000_000:
+        return f"{value / 1_000_000_000:.1f}B"
+    if value >= 1_000_000:
+        return f"{value / 1_000_000:.1f}M"
+    if value >= 1_000:
+        return f"{value / 1_000:.1f}k"
+    return str(value)
+
+
+def git_commit() -> str:
+    repo = Path(__file__).resolve().parent.parent
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"],
+            cwd=repo,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except (OSError, subprocess.CalledProcessError):
+        return "unknown"
+    return result.stdout.strip() or "unknown"
 
 
 def error_class_sum(row: dict[str, str]) -> float:
@@ -289,10 +316,13 @@ def plot_delta_ranked(
     else:
         ax.set_xlim(-max_abs * 1.12, max_abs * 1.12)
     for y_pos, row, value in zip(y_positions, rows, values):
+        left = row["left"]
+        right = row["right"]
+        min_support = min(i(left, "intervals"), i(right, "intervals"))
         ax.text(
             value + (0.025 * max_abs if value >= 0 else -0.025 * max_abs),
             y_pos,
-            f"{value:+.1f}",
+            f"{value:+.1f}; n>={format_count(min_support)}",
             ha="left" if value >= 0 else "right",
             va="center",
             fontsize=8,
@@ -375,6 +405,7 @@ def write_outliers(
 
 def write_manifest(
     path: Path,
+    args: argparse.Namespace,
     raw_joined: list[dict[str, object]],
     rc_joined: list[dict[str, object]],
     raw_paths: list[Path],
@@ -402,6 +433,17 @@ def write_manifest(
         f"Right platform: `{right_label}`",
         "",
         f"Minimum support: `{min_intervals}` intervals in both platforms",
+        "",
+        "## Provenance",
+        "",
+        f"- Command: `{' '.join(sys.argv)}`",
+        f"- Script: `{Path(__file__).name}`",
+        f"- Git commit: `{git_commit()}`",
+        f"- Top N: `{args.top_n}`",
+        f"- Grid size: `{args.gridsize}`",
+        f"- Formats: `{','.join(args.formats)}`",
+        f"- QV error floor: `{args.qv_error_floor}`",
+        f"- Matplotlib: `{matplotlib.__version__}`",
         "",
         "## Summary",
         "",
@@ -471,7 +513,7 @@ def main() -> int:
         raw_joined,
         out_dir,
         args.formats,
-        "platform_kmer_error_hexbin",
+        "platform_kmer_pseudo_qv_hexbin",
         f"{args.left_label} vs {args.right_label}: every k-mer",
         args.left_label,
         args.right_label,
@@ -482,7 +524,7 @@ def main() -> int:
         rc_joined,
         out_dir,
         args.formats,
-        "platform_rc_collapsed_error_hexbin",
+        "platform_rc_collapsed_pseudo_qv_hexbin",
         f"{args.left_label} vs {args.right_label}: RC-collapsed contexts",
         args.left_label,
         args.right_label,
@@ -537,6 +579,7 @@ def main() -> int:
     manifest_path = out_dir / "platform_comparison_manifest.md"
     write_manifest(
         manifest_path,
+        args,
         raw_joined,
         rc_joined,
         raw_paths,

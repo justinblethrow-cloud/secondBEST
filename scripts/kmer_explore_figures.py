@@ -13,6 +13,8 @@ import csv
 import math
 import os
 import re
+import subprocess
+import sys
 from collections import defaultdict
 from pathlib import Path
 
@@ -157,6 +159,31 @@ def passes_support(row: dict[str, str], min_intervals: int, key: str = "interval
 
 def percent(value: float) -> float:
     return 100.0 * value
+
+
+def format_count(value: int) -> str:
+    if value >= 1_000_000_000:
+        return f"{value / 1_000_000_000:.1f}B"
+    if value >= 1_000_000:
+        return f"{value / 1_000_000:.1f}M"
+    if value >= 1_000:
+        return f"{value / 1_000:.1f}k"
+    return str(value)
+
+
+def git_commit() -> str:
+    repo = Path(__file__).resolve().parent.parent
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"],
+            cwd=repo,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except (OSError, subprocess.CalledProcessError):
+        return "unknown"
+    return result.stdout.strip() or "unknown"
 
 
 def configure_axes(ax, *, title: str, xlabel: str = "", ylabel: str = "") -> None:
@@ -361,7 +388,7 @@ def plot_top_kmer_lollipop(
         ax.text(
             value + max_value * 0.015,
             y_pos,
-            f"risk {f(row, 'risk_score'):.2f}",
+            f"risk {f(row, 'risk_score'):.2f}; n={format_count(i(row, 'intervals'))}",
             va="center",
             fontsize=8,
             color="#344054",
@@ -369,7 +396,14 @@ def plot_top_kmer_lollipop(
 
     handles, labels_seen = ax.get_legend_handles_labels()
     unique = dict(zip(labels_seen, handles))
-    ax.legend(unique.values(), unique.keys(), loc="lower right", frameon=False, fontsize=8)
+    ax.legend(
+        unique.values(),
+        unique.keys(),
+        loc="lower left",
+        bbox_to_anchor=(1.01, 0.0),
+        frameon=False,
+        fontsize=8,
+    )
     return (
         "top_kmer_lollipop",
         save_figure(fig, out_dir, figure_stem(file_prefix, "top_kmer_lollipop"), formats),
@@ -494,6 +528,18 @@ def plot_top_kmer_sequence_heatmap(
     ax_bar.spines["right"].set_visible(False)
     ax_bar.tick_params(axis="y", left=False, labelleft=False)
     ax_bar.set_ylim(len(rows) - 0.5, -0.5)
+    max_value = max(values) if values else 0.0
+    for y_pos, row, value in zip(range(len(rows)), rows, values):
+        ax_bar.text(
+            value + max_value * 0.02,
+            y_pos,
+            f"n={format_count(i(row, 'intervals'))}",
+            va="center",
+            fontsize=7,
+            color="#344054",
+        )
+    if max_value:
+        ax_bar.set_xlim(right=max_value * 1.34)
     return (
         "top_kmer_sequence_heatmap",
         save_figure(fig, out_dir, figure_stem(file_prefix, "top_kmer_sequence_heatmap"), formats),
@@ -952,6 +998,7 @@ def first_supported(
 
 def write_manifest(
     path: Path,
+    args: argparse.Namespace,
     label: str,
     platform: str,
     figure_prefix: str,
@@ -985,6 +1032,19 @@ def write_manifest(
         f"Exploration directory: `{explore_dir}`",
         "",
         f"Minimum support used for figures: `{min_intervals}` intervals",
+        "",
+        "## Provenance",
+        "",
+        f"- Command: `{' '.join(sys.argv)}`",
+        f"- Script: `{Path(__file__).name}`",
+        f"- Git commit: `{git_commit()}`",
+        f"- Figure prefix: `{figure_prefix}`",
+        f"- Top N: `{args.top_n}`",
+        f"- Annotate top: `{args.annotate_top}`",
+        f"- Formats: `{','.join(args.formats)}`",
+        f"- SciPy clustering available: `{linkage is not None}`",
+        f"- Matplotlib: `{matplotlib.__version__}`",
+        f"- NumPy: `{np.__version__}`",
         "",
         "## Highlights",
         "",
@@ -1166,6 +1226,7 @@ def main() -> int:
     manifest = out_dir / "figure_manifest.md"
     write_manifest(
         manifest,
+        args,
         args.label,
         args.platform,
         args.figure_prefix,

@@ -67,6 +67,13 @@ to keep files small enough for slide tools. The default platform label and
 figure prefix are Nanopore-oriented; set `--platform "PacBio Revio"` and
 `--figure-prefix revio` for Revio/PacBio output.
 
+Plotting requires `matplotlib` and `numpy`; `scipy` is optional for dendrograms.
+Install plotting dependencies with:
+
+```bash
+python3 -m pip install -r requirements-plotting.txt
+```
+
 ## Platform Comparison Command
 
 After running `scripts/kmer_explore.py` for two datasets, use
@@ -164,8 +171,8 @@ The examples below use the default `nanopore` figure prefix. If
 
 ## Platform Comparison Outputs
 
-- `platform_kmer_error_hexbin`: raw shared k-mer pseudo-QV hexbin.
-- `platform_rc_collapsed_error_hexbin`: reverse-complement-collapsed shared
+- `platform_kmer_pseudo_qv_hexbin`: raw shared k-mer pseudo-QV hexbin.
+- `platform_rc_collapsed_pseudo_qv_hexbin`: reverse-complement-collapsed shared
   context pseudo-QV hexbin.
 - `platform_kmer_delta_ranked`: largest raw k-mer pseudo-QV deltas between the
   two datasets.
@@ -198,7 +205,10 @@ reverse-complement pair asymmetry plus strand mirror, quality calibration,
 motif discovery, and substitution spectrum as supporting detail.
 
 See `docs/kmer_presentation_notes.md` for a presentation-builder-oriented
-summary of the figure set, suggested narrative order, and caveats.
+summary of the figure set, suggested narrative order, and caveats. See
+`docs/kmer_methods_summary.md` for compact methods text covering overlapping
+k-mer intervals, pseudo-QV, reverse-complement collapsing, support thresholds,
+and dendrogram interpretation.
 
 ## Local 20X Platform Demonstration
 

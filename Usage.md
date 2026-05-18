@@ -207,6 +207,9 @@ This writes hexbin plots for every shared k-mer and for
 reverse-complement-collapsed contexts. Hexbin axes are pseudo-QV scores
 computed as `-10 * log10(error_rate)`. Joined and outlier CSVs include both raw
 error rates and pseudo-QV values for annotating platform-specific contexts.
+Install plotting dependencies with `python3 -m pip install -r
+requirements-plotting.txt`; the script can run without SciPy, but the
+requirements file includes it so clustered heatmaps include dendrograms.
 
 ## Help Message:
 ```
