@@ -44,6 +44,25 @@ python3 scripts/kmer_explore.py \
     --out-dir target/tmp/kmer_replicates
 ```
 
+## Figure Command
+
+After generating the exploration tables, use `scripts/kmer_explore_figures.py`
+to make slide-ready figures from the output directory:
+
+```bash
+python3 scripts/kmer_explore_figures.py \
+    --explore-dir target/tmp/kmer_explore \
+    --out-dir target/tmp/kmer_explore/figures \
+    --label "ONT simplex chr20 5x k=7" \
+    --min-intervals 1000 \
+    --top-n 20
+```
+
+The figure script writes PNG and SVG versions by default, plus
+`figure_manifest.md` with highlights, captions, and presentation-builder notes.
+Use the PNGs for dense scatter plots; point clouds are rasterized in SVG output
+to keep files small enough for slide tools.
+
 ## Outputs
 
 - `kmer_enrichment.csv`: observed errors vs expected errors under the
@@ -80,6 +99,25 @@ python3 scripts/kmer_explore.py \
   or `C>T`, available when `--kmer-advanced-stats` was used.
 - `kmer_exploration_report.md`: compact Markdown report with top tables.
 
+## Figure Outputs
+
+- `nanopore_context_error_classes`: top reverse-complement-collapsed contexts
+  with stacked mismatch, non-homopolymer indel, and homopolymer indel rates.
+- `nanopore_homopolymer_run_profile`: error rate by homopolymer run length and
+  base, intended to show whether the expected Nanopore homopolymer signal is
+  visible.
+- `nanopore_rc_pair_asymmetry`: scatter plot comparing each canonical k-mer
+  with its reverse complement.
+- `nanopore_rc_strand_mirror`: support-ranked mirror diagnostic that helps
+  distinguish reverse-complement member differences from ordinary strand bias.
+- `nanopore_quality_calibration`: predicted mean QV vs empirical context QV.
+- `nanopore_motif_enrichment`: model-free motif discovery among high-error
+  k-mers.
+- `nanopore_substitution_spectrum`: substitution ranking derived from the
+  offset-aware substitution table.
+- `nanopore_offset_base_error_heatmap`: compact base-by-offset summary for
+  explaining how the k-mer summaries can be decomposed into positional effects.
+
 ## Interpretation Notes
 
 K-mer intervals overlap, so these reports are context summaries rather than
@@ -91,3 +129,9 @@ reverse complement. For public claims, prefer contexts that have high support,
 stable replicate behavior, similar signal in the reverse-complement-collapsed
 table, and a clear mechanistic pattern in the position, homopolymer-phase,
 strand-mirror, or substitution-spectrum tables.
+
+For presentation use, anchor the story around error-context discovery rather
+than any single chr20 pilot result. A conservative slide sequence is:
+context/error-class enrichment, homopolymer run-length profile,
+reverse-complement pair asymmetry plus strand mirror, quality calibration,
+motif discovery, and substitution spectrum as supporting detail.

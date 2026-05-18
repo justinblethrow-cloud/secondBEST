@@ -56,6 +56,10 @@ homopolymer phase, motif discovery, replicate reliability, strand asymmetry, and
 substitution spectra when advanced k-mer outputs are available. See
 `docs/kmer_exploration.md` for the workflow and output descriptions.
 
+Use `scripts/kmer_explore_figures.py` on an exploration output directory to
+create Nanopore-focused PNG/SVG figures and a Markdown manifest with captions
+and presentation-builder notes.
+
 ### Formatting
 ```
 cargo fmt

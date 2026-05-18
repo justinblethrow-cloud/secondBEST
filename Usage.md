@@ -176,6 +176,19 @@ when multiple prefixes are supplied, and strand/substitution summaries when
 `--kmer-advanced-stats` outputs are present. See `docs/kmer_exploration.md` for
 output descriptions and interpretation notes.
 
+To make presentation figures from the exploration output:
+```
+python3 scripts/kmer_explore_figures.py \
+    --explore-dir target/tmp/kmer_explore \
+    --out-dir target/tmp/kmer_explore/figures \
+    --label "ONT simplex chr20 5x k=7" \
+    --min-intervals 1000 \
+    --top-n 20
+```
+
+This writes PNG/SVG figures plus `figure_manifest.md` with highlights,
+captions, and notes for building a Nanopore error-context slide deck.
+
 ## Help Message:
 ```
 best 0.1.0
