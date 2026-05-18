@@ -45,7 +45,8 @@ Use `scripts/benchmark_kmer.py` to benchmark k-mer modes across thread,
 record-batch, and BAM-reader settings. The script writes raw CSV results plus
 JSON and Markdown reports with repeat medians, peak memory, output-signature
 checks, and candidate proof statements. The full usage guide includes an example
-matrix and the current recommended high-core setting.
+matrix and the current recommended high-core setting. See
+`docs/kmer_benchmarks.md` for the current full-downsample benchmark notes.
 
 ### Formatting
 ```

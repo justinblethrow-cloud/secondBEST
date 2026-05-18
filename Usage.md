@@ -144,6 +144,7 @@ from an existing `benchmark_results.csv` without rerunning BEST.
 
 On the available 5.0 GiB HPRC HG002 downsampled BAM, the fastest k7 aggregate
 setting in this matrix was `--record-batch-size 64 --bam-reader-threads 8`.
+The current full-downsample benchmark notes are in `docs/kmer_benchmarks.md`.
 
 ## Help Message:
 ```
