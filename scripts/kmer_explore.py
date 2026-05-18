@@ -26,6 +26,7 @@ ERROR_RATE_COLUMNS = [
 ]
 
 BASES = ("A", "C", "G", "T")
+RC_TRANS = str.maketrans("ACGT", "TGCA")
 
 
 def parse_args() -> argparse.Namespace:
@@ -132,6 +133,55 @@ def error_rate(row: dict[str, str]) -> float:
     return max(0.0, 1.0 - f(row, "identity", 1.0))
 
 
+def reverse_complement(kmer: str) -> str:
+    return kmer.translate(RC_TRANS)[::-1]
+
+
+def canonical_kmer(kmer: str) -> str:
+    rc = reverse_complement(kmer)
+    return min(kmer, rc)
+
+
+def pair_status(
+    member_a: str, row_a: dict[str, str] | None, row_b: dict[str, str] | None
+) -> str:
+    if member_a == reverse_complement(member_a):
+        return "palindrome"
+    if row_a and row_b:
+        return "complete"
+    if row_a:
+        return "missing_reverse_complement"
+    if row_b:
+        return "missing_canonical"
+    return "missing_both"
+
+
+def passes_min_intervals(min_intervals: int, intervals: int) -> str:
+    return "true" if intervals >= min_intervals else "false"
+
+
+def kmer_count_fields(row: dict[str, str]) -> dict[str, float]:
+    intervals = i(row, "intervals")
+    counts = {
+        "intervals": float(intervals),
+        "matches": intervals * f(row, "matches_per_interval"),
+        "mismatches": intervals * f(row, "mismatches_per_interval"),
+        "non_hp_ins": intervals * f(row, "non_hp_ins_per_interval"),
+        "non_hp_del": intervals * f(row, "non_hp_del_per_interval"),
+        "hp_ins": intervals * f(row, "hp_ins_per_interval"),
+        "hp_del": intervals * f(row, "hp_del_per_interval"),
+    }
+    counts["errors"] = (
+        counts["mismatches"]
+        + counts["non_hp_ins"]
+        + counts["non_hp_del"]
+        + counts["hp_ins"]
+        + counts["hp_del"]
+    )
+    counts["observations"] = counts["matches"] + counts["errors"]
+    return counts
+
+
 def load_sample(prefix: Path, label: str) -> dict[str, object]:
     def summary(name: str) -> list[dict[str, str]]:
         return read_csv(Path(f"{prefix}.{name}"))
@@ -183,6 +233,192 @@ def kmer_enrichment(samples: list[dict[str, object]]) -> list[dict[str, object]]
                 )
 
     rows.sort(key=lambda row: (row["sample"], -float(row["z_score"]), -float(row["enrichment"])))
+    return rows
+
+
+def rc_collapsed_kmers(
+    samples: list[dict[str, object]], min_intervals: int
+) -> list[dict[str, object]]:
+    collapsed = []
+    for sample in samples:
+        grouped: dict[tuple[str, str], dict[str, object]] = {}
+        for row in sample["kmer"]:
+            kmer = row["kmer"]
+            key = (row["kmer_len"], canonical_kmer(kmer))
+            group = grouped.setdefault(
+                key,
+                {
+                    "sample": sample["label"],
+                    "kmer_len": row["kmer_len"],
+                    "canonical_kmer": key[1],
+                    "members": set(),
+                    "member_rates": {},
+                    "intervals": 0.0,
+                    "matches": 0.0,
+                    "mismatches": 0.0,
+                    "non_hp_ins": 0.0,
+                    "non_hp_del": 0.0,
+                    "hp_ins": 0.0,
+                    "hp_del": 0.0,
+                    "errors": 0.0,
+                    "observations": 0.0,
+                },
+            )
+            counts = kmer_count_fields(row)
+            group["members"].add(kmer)
+            group["member_rates"][kmer] = error_rate(row)
+            for field in [
+                "intervals",
+                "matches",
+                "mismatches",
+                "non_hp_ins",
+                "non_hp_del",
+                "hp_ins",
+                "hp_del",
+                "errors",
+                "observations",
+            ]:
+                group[field] += counts[field]
+
+        by_k: dict[str, list[dict[str, object]]] = defaultdict(list)
+        for group in grouped.values():
+            by_k[str(group["kmer_len"])].append(group)
+
+        for groups in by_k.values():
+            total_intervals = sum(float(group["intervals"]) for group in groups)
+            total_errors = sum(float(group["errors"]) for group in groups)
+            background = total_errors / total_intervals if total_intervals else 0.0
+            for group in groups:
+                intervals = float(group["intervals"])
+                errors = float(group["errors"])
+                expected = intervals * background
+                identity = (
+                    float(group["matches"]) / float(group["observations"])
+                    if float(group["observations"]) > 0
+                    else 0.0
+                )
+                member_rates = group["member_rates"]
+                members = sorted(group["members"])
+                dominant_member = max(member_rates, key=lambda member: member_rates[member])
+                collapsed.append(
+                    {
+                        "sample": group["sample"],
+                        "kmer_len": group["kmer_len"],
+                        "canonical_kmer": group["canonical_kmer"],
+                        "members": ";".join(members),
+                        "member_count": len(members),
+                        "intervals": int(round(intervals)),
+                        "passes_min_intervals": passes_min_intervals(
+                            min_intervals, int(round(intervals))
+                        ),
+                        "identity": f"{identity:.8f}",
+                        "error_rate": f"{1.0 - identity:.8f}",
+                        "errors_per_interval": f"{errors / intervals:.8f}"
+                        if intervals
+                        else "0.00000000",
+                        "observed_errors": f"{errors:.3f}",
+                        "expected_errors": f"{expected:.3f}",
+                        "enrichment": f"{errors / expected:.6f}" if expected else "0.000000",
+                        "z_score": f"{(errors - expected) / math.sqrt(expected):.6f}"
+                        if expected
+                        else "0.000000",
+                        "mismatches_per_interval": f"{float(group['mismatches']) / intervals:.8f}"
+                        if intervals
+                        else "0.00000000",
+                        "non_hp_ins_per_interval": f"{float(group['non_hp_ins']) / intervals:.8f}"
+                        if intervals
+                        else "0.00000000",
+                        "non_hp_del_per_interval": f"{float(group['non_hp_del']) / intervals:.8f}"
+                        if intervals
+                        else "0.00000000",
+                        "hp_ins_per_interval": f"{float(group['hp_ins']) / intervals:.8f}"
+                        if intervals
+                        else "0.00000000",
+                        "hp_del_per_interval": f"{float(group['hp_del']) / intervals:.8f}"
+                        if intervals
+                        else "0.00000000",
+                        "dominant_member": dominant_member,
+                        "member_error_rate_range": f"{max(member_rates.values()) - min(member_rates.values()):.8f}",
+                    }
+                )
+    collapsed.sort(
+        key=lambda row: (
+            row["sample"],
+            row["passes_min_intervals"] != "true",
+            -float(row["z_score"]),
+            -float(row["enrichment"]),
+        )
+    )
+    return collapsed
+
+
+def rc_pair_diagnostics(
+    samples: list[dict[str, object]], min_intervals: int
+) -> list[dict[str, object]]:
+    rows = []
+    for sample in samples:
+        by_key = {(row["kmer_len"], row["kmer"]): row for row in sample["kmer"]}
+        seen = set()
+        for row in sample["kmer"]:
+            kmer_len = row["kmer_len"]
+            member_a = canonical_kmer(row["kmer"])
+            if (kmer_len, member_a) in seen:
+                continue
+            seen.add((kmer_len, member_a))
+            member_b = reverse_complement(member_a)
+            row_a = by_key.get((kmer_len, member_a))
+            row_b = by_key.get((kmer_len, member_b))
+            rate_a = error_rate(row_a) if row_a else None
+            rate_b = error_rate(row_b) if row_b else None
+            intervals_a = i(row_a, "intervals") if row_a else 0
+            intervals_b = i(row_b, "intervals") if row_b else 0
+            min_pair_intervals = min(intervals_a, intervals_b) if row_a and row_b else 0
+            total_pair_intervals = intervals_a + intervals_b
+            abs_delta = (
+                abs(rate_b - rate_a)
+                if rate_a is not None and rate_b is not None
+                else 0.0
+            )
+            support_weighted_delta = abs_delta * math.log10(min_pair_intervals + 1)
+            rows.append(
+                {
+                    "sample": sample["label"],
+                    "kmer_len": kmer_len,
+                    "canonical_kmer": member_a,
+                    "member_a": member_a,
+                    "member_b": member_b,
+                    "pair_status": pair_status(member_a, row_a, row_b),
+                    "member_a_intervals": intervals_a if row_a else "",
+                    "member_b_intervals": intervals_b if row_b else "",
+                    "min_member_intervals": min_pair_intervals if row_a and row_b else "",
+                    "total_pair_intervals": total_pair_intervals,
+                    "passes_min_intervals": passes_min_intervals(
+                        min_intervals, min_pair_intervals
+                    ),
+                    "member_a_error_rate": f"{rate_a:.8f}" if rate_a is not None else "",
+                    "member_b_error_rate": f"{rate_b:.8f}" if rate_b is not None else "",
+                    "delta_b_minus_a": f"{rate_b - rate_a:.8f}"
+                    if rate_a is not None and rate_b is not None
+                    else "",
+                    "abs_delta_error_rate": f"{abs(rate_b - rate_a):.8f}"
+                    if rate_a is not None and rate_b is not None
+                    else "",
+                    "log2_b_a_error_ratio": f"{log2_ratio(rate_b, rate_a):.8f}"
+                    if rate_a is not None and rate_b is not None
+                    else "",
+                    "support_weighted_delta": f"{support_weighted_delta:.8f}",
+                }
+            )
+    rows.sort(
+        key=lambda row: (
+            row["sample"],
+            row["pair_status"] != "complete",
+            row["passes_min_intervals"] != "true",
+            -float(row["support_weighted_delta"]),
+            -float(row["abs_delta_error_rate"] or 0.0),
+            row["canonical_kmer"],
+        )
+    )
     return rows
 
 
@@ -459,6 +695,91 @@ def strand_asymmetry(samples: list[dict[str, object]]) -> list[dict[str, object]
     return rows
 
 
+def rc_strand_mirror(
+    samples: list[dict[str, object]], min_intervals: int
+) -> list[dict[str, object]]:
+    rows = []
+    for sample in samples:
+        grouped: dict[tuple[str, str], dict[str, dict[str, str]]] = defaultdict(dict)
+        for row in sample["strand"]:
+            grouped[row_key(row)][row["strand"]] = row
+
+        seen = set()
+        for (kmer_len, kmer), strands_a in grouped.items():
+            member_a = canonical_kmer(kmer)
+            if (kmer_len, member_a) in seen:
+                continue
+            seen.add((kmer_len, member_a))
+            member_b = reverse_complement(member_a)
+            strands_a = grouped.get((kmer_len, member_a), {})
+            strands_b = grouped.get((kmer_len, member_b), {})
+            if not all(
+                strand in strands
+                for strands in [strands_a, strands_b]
+                for strand in ["forward", "reverse"]
+            ):
+                continue
+
+            a_fwd = 1.0 - f(strands_a["forward"], "identity", 1.0)
+            a_rev = 1.0 - f(strands_a["reverse"], "identity", 1.0)
+            b_fwd = 1.0 - f(strands_b["forward"], "identity", 1.0)
+            b_rev = 1.0 - f(strands_b["reverse"], "identity", 1.0)
+            mirror_delta_a_fwd_b_rev = a_fwd - b_rev
+            mirror_delta_a_rev_b_fwd = a_rev - b_fwd
+            member_intervals = [
+                i(strands_a["forward"], "intervals"),
+                i(strands_a["reverse"], "intervals"),
+                i(strands_b["forward"], "intervals"),
+                i(strands_b["reverse"], "intervals"),
+            ]
+            min_member_strand_intervals = min(member_intervals)
+            max_within_member_delta = max(abs(a_rev - a_fwd), abs(b_rev - b_fwd))
+            mirror_discordance = abs(mirror_delta_a_fwd_b_rev) + abs(
+                mirror_delta_a_rev_b_fwd
+            )
+            support_weighted_mirror_discordance = (
+                mirror_discordance * math.log10(min_member_strand_intervals + 1)
+            )
+            rows.append(
+                {
+                    "sample": sample["label"],
+                    "kmer_len": kmer_len,
+                    "canonical_kmer": member_a,
+                    "member_a": member_a,
+                    "member_b": member_b,
+                    "member_a_forward_intervals": member_intervals[0],
+                    "member_a_reverse_intervals": member_intervals[1],
+                    "member_b_forward_intervals": member_intervals[2],
+                    "member_b_reverse_intervals": member_intervals[3],
+                    "min_member_strand_intervals": min_member_strand_intervals,
+                    "passes_min_intervals": passes_min_intervals(
+                        min_intervals, min_member_strand_intervals
+                    ),
+                    "member_a_forward_error_rate": f"{a_fwd:.8f}",
+                    "member_a_reverse_error_rate": f"{a_rev:.8f}",
+                    "member_b_forward_error_rate": f"{b_fwd:.8f}",
+                    "member_b_reverse_error_rate": f"{b_rev:.8f}",
+                    "member_a_delta_reverse_minus_forward": f"{a_rev - a_fwd:.8f}",
+                    "member_b_delta_reverse_minus_forward": f"{b_rev - b_fwd:.8f}",
+                    "mirror_delta_a_forward_vs_b_reverse": f"{mirror_delta_a_fwd_b_rev:.8f}",
+                    "mirror_delta_a_reverse_vs_b_forward": f"{mirror_delta_a_rev_b_fwd:.8f}",
+                    "max_within_member_delta": f"{max_within_member_delta:.8f}",
+                    "mirror_discordance": f"{mirror_discordance:.8f}",
+                    "support_weighted_mirror_discordance": f"{support_weighted_mirror_discordance:.8f}",
+                }
+            )
+    rows.sort(
+        key=lambda row: (
+            row["sample"],
+            row["passes_min_intervals"] != "true",
+            -float(row["support_weighted_mirror_discordance"]),
+            -float(row["max_within_member_delta"]),
+            -float(row["mirror_discordance"]),
+        )
+    )
+    return rows
+
+
 def substitution_spectrum(samples: list[dict[str, object]]) -> list[dict[str, object]]:
     rows = []
     for sample in samples:
@@ -577,6 +898,36 @@ def write_report(
             ["sample", "kmer_len", "kmer", "intervals", "enrichment", "z_score", "error_rate"],
         ),
         (
+            "Top Reverse-Complement-Collapsed Error Contexts",
+            "rc_collapsed_kmers",
+            [
+                "sample",
+                "kmer_len",
+                "canonical_kmer",
+                "members",
+                "intervals",
+                "enrichment",
+                "z_score",
+                "error_rate",
+                "member_error_rate_range",
+            ],
+        ),
+        (
+            "Largest Reverse-Complement Pair Differences",
+            "rc_pair_diagnostics",
+            [
+                "sample",
+                "kmer_len",
+                "member_a",
+                "member_b",
+                "min_member_intervals",
+                "member_a_error_rate",
+                "member_b_error_rate",
+                "abs_delta_error_rate",
+                "support_weighted_delta",
+            ],
+        ),
+        (
             "Most Overconfident Contexts",
             "quality_calibration",
             [
@@ -627,6 +978,20 @@ def write_report(
             ],
         ),
         (
+            "Reverse-Complement Strand Mirror Diagnostics",
+            "rc_strand_mirror",
+            [
+                "sample",
+                "kmer_len",
+                "member_a",
+                "member_b",
+                "min_member_strand_intervals",
+                "max_within_member_delta",
+                "mirror_discordance",
+                "support_weighted_mirror_discordance",
+            ],
+        ),
+        (
             "Substitution Spectrum",
             "substitution_spectrum",
             [
@@ -673,6 +1038,8 @@ def main() -> int:
 
     outputs = {
         "kmer_enrichment": kmer_enrichment(samples),
+        "rc_collapsed_kmers": rc_collapsed_kmers(samples, args.min_intervals),
+        "rc_pair_diagnostics": rc_pair_diagnostics(samples, args.min_intervals),
         "quality_calibration": quality_calibration(samples),
         "hp_phase_profile": hp_phase_profile(samples),
         "position_heatmap": position_heatmap(samples),
@@ -682,6 +1049,7 @@ def main() -> int:
         "risk_ranked_kmers": risk_ranked_kmers(samples, args.min_intervals),
         "replicate_reliability": replicate_reliability(samples),
         "strand_asymmetry": strand_asymmetry(samples),
+        "rc_strand_mirror": rc_strand_mirror(samples, args.min_intervals),
         "substitution_spectrum": substitution_spectrum(samples),
     }
 
@@ -697,6 +1065,48 @@ def main() -> int:
             "z_score",
             "identity",
             "error_rate",
+        ],
+        "rc_collapsed_kmers": [
+            "sample",
+            "kmer_len",
+            "canonical_kmer",
+            "members",
+            "member_count",
+            "intervals",
+            "passes_min_intervals",
+            "identity",
+            "error_rate",
+            "errors_per_interval",
+            "observed_errors",
+            "expected_errors",
+            "enrichment",
+            "z_score",
+            "mismatches_per_interval",
+            "non_hp_ins_per_interval",
+            "non_hp_del_per_interval",
+            "hp_ins_per_interval",
+            "hp_del_per_interval",
+            "dominant_member",
+            "member_error_rate_range",
+        ],
+        "rc_pair_diagnostics": [
+            "sample",
+            "kmer_len",
+            "canonical_kmer",
+            "member_a",
+            "member_b",
+            "pair_status",
+            "member_a_intervals",
+            "member_b_intervals",
+            "min_member_intervals",
+            "total_pair_intervals",
+            "passes_min_intervals",
+            "member_a_error_rate",
+            "member_b_error_rate",
+            "delta_b_minus_a",
+            "abs_delta_error_rate",
+            "log2_b_a_error_ratio",
+            "support_weighted_delta",
         ],
         "quality_calibration": [
             "sample",
@@ -786,6 +1196,30 @@ def main() -> int:
             "reverse_error_rate",
             "delta_reverse_minus_forward",
             "log2_reverse_forward_ratio",
+        ],
+        "rc_strand_mirror": [
+            "sample",
+            "kmer_len",
+            "canonical_kmer",
+            "member_a",
+            "member_b",
+            "member_a_forward_intervals",
+            "member_a_reverse_intervals",
+            "member_b_forward_intervals",
+            "member_b_reverse_intervals",
+            "min_member_strand_intervals",
+            "passes_min_intervals",
+            "member_a_forward_error_rate",
+            "member_a_reverse_error_rate",
+            "member_b_forward_error_rate",
+            "member_b_reverse_error_rate",
+            "member_a_delta_reverse_minus_forward",
+            "member_b_delta_reverse_minus_forward",
+            "mirror_delta_a_forward_vs_b_reverse",
+            "mirror_delta_a_reverse_vs_b_forward",
+            "max_within_member_delta",
+            "mirror_discordance",
+            "support_weighted_mirror_discordance",
         ],
         "substitution_spectrum": [
             "sample",

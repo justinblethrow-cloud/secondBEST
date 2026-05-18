@@ -51,6 +51,7 @@ matrix and the current recommended high-core setting. See
 ### K-mer Exploration
 Use `scripts/kmer_explore.py` on one or more BEST output prefixes to generate
 scientific k-mer reports covering context enrichment, quality calibration,
+reverse-complement-collapsed summaries, reverse-complement pair diagnostics,
 homopolymer phase, motif discovery, replicate reliability, strand asymmetry, and
 substitution spectra when advanced k-mer outputs are available. See
 `docs/kmer_exploration.md` for the workflow and output descriptions.

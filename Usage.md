@@ -169,11 +169,12 @@ python3 scripts/kmer_explore.py \
 ```
 
 The report includes k-mer error enrichment, quality calibration by context,
-homopolymer phase profiles, per-offset heatmap-ready tables, model-free motif
-enrichment, consensus-risk ranked k-mers, replicate reliability when multiple
-prefixes are supplied, and strand/substitution summaries when
-`--kmer-advanced-stats` outputs are present. See `docs/kmer_exploration.md`
-for output descriptions and interpretation notes.
+reverse-complement-collapsed context summaries, direct reverse-complement pair
+diagnostics, homopolymer phase profiles, per-offset heatmap-ready tables,
+model-free motif enrichment, consensus-risk ranked k-mers, replicate reliability
+when multiple prefixes are supplied, and strand/substitution summaries when
+`--kmer-advanced-stats` outputs are present. See `docs/kmer_exploration.md` for
+output descriptions and interpretation notes.
 
 ## Help Message:
 ```

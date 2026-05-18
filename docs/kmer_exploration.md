@@ -49,6 +49,15 @@ python3 scripts/kmer_explore.py \
 - `kmer_enrichment.csv`: observed errors vs expected errors under the
   k-length-specific background rate. Useful for separating common high-count
   k-mers from unusually error-enriched contexts.
+- `rc_collapsed_kmers.csv`: reverse-complement-collapsed k-mer enrichment.
+  Each row groups a canonical k-mer with its reverse complement, preserving the
+  member list, dominant member, and member error-rate range. Use this table
+  when interpreting context effects that should be independent of reported
+  read orientation.
+- `rc_pair_diagnostics.csv`: direct comparisons between each canonical k-mer
+  and its reverse complement. This includes member-specific intervals,
+  error-rate deltas, log2 error-rate ratios, and a support-weighted delta for
+  ranking high-confidence orientation differences.
 - `quality_calibration.csv`: empirical k-mer QV vs mean predicted quality.
   Positive `overconfidence_qv` marks contexts where predicted quality is higher
   than empirical accuracy.
@@ -64,6 +73,9 @@ python3 scripts/kmer_explore.py \
   across multiple prefixes.
 - `strand_asymmetry.csv`: forward vs reverse error-rate differences, available
   when `--kmer-advanced-stats` was used.
+- `rc_strand_mirror.csv`: reverse-complement pair diagnostics split by forward
+  and reverse alignment strand. This helps distinguish a true
+  reverse-complement member difference from an ordinary strand effect.
 - `substitution_spectrum.csv`: offset-aware substitution spectra such as `G>A`
   or `C>T`, available when `--kmer-advanced-stats` was used.
 - `kmer_exploration_report.md`: compact Markdown report with top tables.
@@ -72,7 +84,10 @@ python3 scripts/kmer_explore.py \
 
 K-mer intervals overlap, so these reports are context summaries rather than
 partitioned base counts. Enrichment and risk scores should be used to prioritize
-contexts for inspection, not as formal hypothesis tests. For public claims,
-prefer contexts that have high support, stable replicate behavior, and a clear
-mechanistic pattern in the position, homopolymer-phase, or substitution-spectrum
-tables.
+contexts for inspection, not as formal hypothesis tests. BEST reports k-mers in
+read orientation, which is useful for diagnosing platform and alignment
+behavior, but it can split a chemistry-driven context across a k-mer and its
+reverse complement. For public claims, prefer contexts that have high support,
+stable replicate behavior, similar signal in the reverse-complement-collapsed
+table, and a clear mechanistic pattern in the position, homopolymer-phase,
+strand-mirror, or substitution-spectrum tables.
