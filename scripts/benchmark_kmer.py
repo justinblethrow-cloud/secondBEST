@@ -66,6 +66,7 @@ CSV_FIELDS = [
     "reference_sha256",
     "output_prefix",
     "output_signature",
+    "output_byte_signature",
     "command",
 ]
 
@@ -224,6 +225,7 @@ def hash_file(path: Path) -> str:
 
 def output_metrics(prefix: Path) -> dict[str, str]:
     metrics: dict[str, str] = {}
+    byte_signature_parts = []
     signature_parts = []
     for name in SUMMARY_FILES:
         stem = name.removesuffix(".csv")
@@ -232,12 +234,21 @@ def output_metrics(prefix: Path) -> dict[str, str]:
             size = path.stat().st_size
             rows = file_rows(path)
             file_hash = hash_file(path)
+            normalized_hash = normalized_csv_hash(path)
             metrics[f"{stem}_bytes"] = str(size)
             metrics[f"{stem}_rows"] = str(rows)
-            signature_parts.append(f"{name}:{size}:{rows}:{file_hash}")
+            byte_signature_parts.append(f"{name}:{size}:{rows}:{file_hash}")
+            signature_parts.append(f"{name}:{size}:{rows}:{normalized_hash}")
         else:
             metrics[f"{stem}_bytes"] = ""
             metrics[f"{stem}_rows"] = ""
+
+    if byte_signature_parts:
+        digest = hashlib.sha256()
+        digest.update("\n".join(byte_signature_parts).encode())
+        metrics["output_byte_signature"] = digest.hexdigest()
+    else:
+        metrics["output_byte_signature"] = ""
 
     if signature_parts:
         digest = hashlib.sha256()
@@ -246,6 +257,25 @@ def output_metrics(prefix: Path) -> dict[str, str]:
     else:
         metrics["output_signature"] = ""
     return metrics
+
+
+def normalized_csv_hash(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open(newline="") as handle:
+        reader = csv.reader(handle)
+        for row in reader:
+            digest.update("\t".join(normalize_csv_cell(cell) for cell in row).encode())
+            digest.update(b"\n")
+    return digest.hexdigest()
+
+
+def normalize_csv_cell(cell: str) -> str:
+    if "." not in cell and "e" not in cell.lower():
+        return cell
+    try:
+        return f"{float(cell):.5f}"
+    except ValueError:
+        return cell
 
 
 def benchmark_modes(
@@ -380,6 +410,17 @@ def load_rows(csv_path: Path) -> list[dict[str, str]]:
         return []
     with csv_path.open(newline="") as handle:
         return list(csv.DictReader(handle))
+
+
+def refresh_output_metrics(rows: list[dict[str, str]]) -> list[dict[str, str]]:
+    refreshed = []
+    for row in rows:
+        output_prefix = row.get("output_prefix")
+        if output_prefix:
+            metrics = output_metrics(Path(output_prefix))
+            row = {**row, **metrics}
+        refreshed.append(row)
+    return refreshed
 
 
 def safe_float(value: str | None) -> float | None:
@@ -696,7 +737,7 @@ def render_report(
             "",
             "## Output consistency",
             "",
-            "Output signatures hash all generated summary CSVs for a run. For a fixed mode, signatures should match across thread, batch, BGZF, and repeat settings.",
+            "Output signatures hash all generated summary CSVs for a run after normalizing floating-point fields to 5 decimal places. For a fixed mode, signatures should match across thread, batch, BGZF, and repeat settings while preserving integer/count differences.",
             "",
             markdown_table(
                 ["Mode", "k", "Position", "Unique signatures", "Consistent"],
@@ -867,6 +908,8 @@ def main() -> int:
                                     )
 
     rows = load_rows(csv_path)
+    if args.report_only:
+        rows = refresh_output_metrics(rows)
     summary = summarize_rows(rows)
     meta = metadata(args, best, bam, reference, bam_sha256, reference_sha256)
     write_json_summary(json_path, meta, summary)
