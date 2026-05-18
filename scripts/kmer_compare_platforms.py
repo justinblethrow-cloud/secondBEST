@@ -249,6 +249,58 @@ def plot_hexbin(
     return save_figure(fig, out_dir, stem, formats)
 
 
+def plot_delta_ranked(
+    joined: list[dict[str, object]],
+    out_dir: Path,
+    formats: list[str],
+    stem: str,
+    title: str,
+    left_label: str,
+    right_label: str,
+    key_label: str,
+    top_n: int,
+) -> list[Path]:
+    ranked = sorted(
+        joined,
+        key=lambda row: abs(float(row["delta_right_minus_left_pseudo_qv"])),
+        reverse=True,
+    )[:top_n]
+    rows = list(reversed(ranked))
+    labels = [str(row["key"]) for row in rows]
+    values = [float(row["delta_right_minus_left_pseudo_qv"]) for row in rows]
+    colors = ["#2E7D32" if value >= 0 else "#B42318" for value in values]
+    y_positions = list(range(len(rows)))
+
+    fig, ax = plt.subplots(figsize=(8.6, max(4.8, 0.34 * len(rows) + 1.6)))
+    ax.barh(y_positions, values, color=colors, height=0.72)
+    ax.axvline(0.0, color="#475467", linewidth=1.0)
+    ax.set_yticks(y_positions, labels)
+    ax.set_title(title, loc="left", fontsize=12, fontweight="bold")
+    ax.set_xlabel(f"{right_label} - {left_label} pseudo-QV")
+    ax.set_ylabel(key_label)
+    ax.grid(True, axis="x", color="#D8DEE9", linewidth=0.6, alpha=0.8)
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
+    max_abs = max([abs(value) for value in values] or [1.0])
+    if values and min(values) >= 0.0:
+        ax.set_xlim(0.0, max_abs * 1.18)
+    elif values and max(values) <= 0.0:
+        ax.set_xlim(-max_abs * 1.18, 0.0)
+    else:
+        ax.set_xlim(-max_abs * 1.12, max_abs * 1.12)
+    for y_pos, row, value in zip(y_positions, rows, values):
+        ax.text(
+            value + (0.025 * max_abs if value >= 0 else -0.025 * max_abs),
+            y_pos,
+            f"{value:+.1f}",
+            ha="left" if value >= 0 else "right",
+            va="center",
+            fontsize=8,
+            color="#344054",
+        )
+    return save_figure(fig, out_dir, stem, formats)
+
+
 def write_joined_table(
     path: Path,
     joined: list[dict[str, object]],
@@ -327,6 +379,8 @@ def write_manifest(
     rc_joined: list[dict[str, object]],
     raw_paths: list[Path],
     rc_paths: list[Path],
+    raw_delta_paths: list[Path],
+    rc_delta_paths: list[Path],
     table_paths: list[Path],
     left_label: str,
     right_label: str,
@@ -362,6 +416,8 @@ def write_manifest(
         "",
         f"- Raw k-mer pseudo-QV hexbin: {', '.join(f'`{path.name}`' for path in raw_paths)}",
         f"- Reverse-complement-collapsed pseudo-QV hexbin: {', '.join(f'`{path.name}`' for path in rc_paths)}",
+        f"- Raw k-mer ranked pseudo-QV deltas: {', '.join(f'`{path.name}`' for path in raw_delta_paths)}",
+        f"- Reverse-complement-collapsed ranked pseudo-QV deltas: {', '.join(f'`{path.name}`' for path in rc_delta_paths)}",
         "",
         "## Tables",
         "",
@@ -372,6 +428,7 @@ def write_manifest(
         f"- Use the raw k-mer hexbin as the main {left_label}-vs-{right_label} comparison slide.",
         "- Axes are pseudo-QV scores computed as `-10 * log10(error_rate)`, capped by the configured error floor for zero-rate contexts.",
         "- The diagonal is equal pseudo-QV; points or density above it have higher pseudo-QV and lower error in the right platform, below it higher pseudo-QV and lower error in the left platform.",
+        "- Use ranked pseudo-QV delta plots when you need concrete sequence labels after the hexbin establishes the global platform separation.",
         "- Use the reverse-complement-collapsed hexbin to show whether the platform contrast survives orientation collapsing.",
         "- Pair the hexbin slide with the outlier CSV to annotate a few concrete k-mers only after the density story is clear.",
     ]
@@ -432,6 +489,28 @@ def main() -> int:
         args.gridsize,
         "RC-collapsed pseudo-QV (-10 log10 error rate)",
     )
+    raw_delta_paths = plot_delta_ranked(
+        raw_joined,
+        out_dir,
+        args.formats,
+        "platform_kmer_delta_ranked",
+        f"{args.left_label} vs {args.right_label}: largest k-mer QV deltas",
+        args.left_label,
+        args.right_label,
+        "K-mer",
+        args.top_n,
+    )
+    rc_delta_paths = plot_delta_ranked(
+        rc_joined,
+        out_dir,
+        args.formats,
+        "platform_rc_collapsed_delta_ranked",
+        f"{args.left_label} vs {args.right_label}: largest RC-collapsed QV deltas",
+        args.left_label,
+        args.right_label,
+        "Canonical k-mer",
+        args.top_n,
+    )
 
     joined_path = out_dir / "platform_kmer_joined.csv"
     outlier_path = out_dir / "platform_kmer_outliers.csv"
@@ -462,13 +541,15 @@ def main() -> int:
         rc_joined,
         raw_paths,
         rc_paths,
+        raw_delta_paths,
+        rc_delta_paths,
         table_paths,
         args.left_label,
         args.right_label,
         args.min_intervals,
     )
 
-    for path in raw_paths + rc_paths + table_paths + [manifest_path]:
+    for path in raw_paths + rc_paths + raw_delta_paths + rc_delta_paths + table_paths + [manifest_path]:
         print(f"wrote {path}")
     return 0
 

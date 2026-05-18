@@ -138,6 +138,15 @@ The examples below use the default `nanopore` figure prefix. If
 
 - `<prefix>_context_error_classes`: top reverse-complement-collapsed contexts
   with stacked mismatch, non-homopolymer indel, and homopolymer indel rates.
+- `<prefix>_top_kmer_lollipop`: top high-risk raw k-mers ranked by error rate
+  and colored by dominant mismatch/indel behavior.
+- `<prefix>_top_kmer_clustered_heatmap`: top high-risk raw k-mers clustered by
+  sequence and error-profile features, with a row dendrogram when SciPy is
+  available.
+- `<prefix>_top_kmer_sequence_heatmap`: base-by-position heatmap for top raw
+  k-mers with adjacent error-rate bars.
+- `<prefix>_motif_aligned_contexts`: top high-risk k-mers containing the
+  leading enriched motif, aligned to the motif start.
 - `<prefix>_homopolymer_run_profile`: error rate by homopolymer run length and
   base, intended to show whether the expected Nanopore homopolymer signal is
   visible.
@@ -158,6 +167,10 @@ The examples below use the default `nanopore` figure prefix. If
 - `platform_kmer_error_hexbin`: raw shared k-mer pseudo-QV hexbin.
 - `platform_rc_collapsed_error_hexbin`: reverse-complement-collapsed shared
   context pseudo-QV hexbin.
+- `platform_kmer_delta_ranked`: largest raw k-mer pseudo-QV deltas between the
+  two datasets.
+- `platform_rc_collapsed_delta_ranked`: largest reverse-complement-collapsed
+  pseudo-QV deltas between the two datasets.
 - `platform_kmer_joined.csv` and `platform_kmer_outliers.csv`: raw k-mer
   comparison tables with error-rate and pseudo-QV columns.
 - `platform_rc_collapsed_joined.csv` and
@@ -183,6 +196,9 @@ than any single chr20 pilot result. A conservative slide sequence is:
 context/error-class enrichment, homopolymer run-length profile,
 reverse-complement pair asymmetry plus strand mirror, quality calibration,
 motif discovery, and substitution spectrum as supporting detail.
+
+See `docs/kmer_presentation_notes.md` for a presentation-builder-oriented
+summary of the figure set, suggested narrative order, and caveats.
 
 ## Local 20X Platform Demonstration
 

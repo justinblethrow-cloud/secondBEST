@@ -64,6 +64,8 @@ and presentation-builder notes. The defaults are Nanopore-oriented; set
 Use `scripts/kmer_compare_platforms.py` to compare two exploration directories
 directly. It writes raw and reverse-complement-collapsed hexbin plots of every
 shared k-mer's pseudo-QV score, plus joined/outlier CSVs for annotation.
+See `docs/kmer_presentation_notes.md` for presentation-builder notes and a
+suggested figure narrative.
 
 ### Formatting
 ```

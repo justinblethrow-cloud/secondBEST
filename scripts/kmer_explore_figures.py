@@ -23,10 +23,25 @@ import matplotlib
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-from matplotlib.colors import Normalize
+import numpy as np
+from matplotlib.colors import ListedColormap, Normalize
+
+try:
+    from scipy.cluster.hierarchy import dendrogram, leaves_list, linkage
+except ImportError:  # pragma: no cover - exercised only when SciPy is absent.
+    dendrogram = None
+    leaves_list = None
+    linkage = None
 
 
 BASES = ("A", "C", "G", "T")
+BASE_COLORS = {
+    "A": "#3B78E7",
+    "C": "#6A994E",
+    "G": "#8E5CF3",
+    "T": "#E07A5F",
+}
+BASE_TO_INDEX = {base: idx for idx, base in enumerate(BASES)}
 ERROR_CLASS_COLUMNS = [
     ("mismatches_per_interval", "Mismatch", "#3B78E7"),
     ("non_hp_ins_per_interval", "Non-HP insertion", "#E07A5F"),
@@ -169,6 +184,91 @@ def choose_supported(rows: list[dict[str, str]], min_intervals: int) -> list[dic
     return supported or rows
 
 
+def top_supported_risk_rows(
+    rows: list[dict[str, str]],
+    min_intervals: int,
+    top_n: int,
+) -> list[dict[str, str]]:
+    rows = choose_supported(rows, min_intervals)
+    rows = sorted(
+        rows,
+        key=lambda row: (
+            -f(row, "risk_score", f(row, "error_rate")),
+            -f(row, "error_rate"),
+            -i(row, "intervals"),
+        ),
+    )
+    return rows[:top_n]
+
+
+def dominant_error_label(row: dict[str, str]) -> str:
+    mismatch_fraction = f(row, "mismatch_fraction")
+    non_hp_indel_fraction = f(row, "non_hp_indel_fraction")
+    indel_fraction = f(row, "indel_fraction")
+    if mismatch_fraction >= max(non_hp_indel_fraction, indel_fraction - non_hp_indel_fraction):
+        return "Mismatch-heavy"
+    if non_hp_indel_fraction >= 0.5:
+        return "Non-HP indel-heavy"
+    return "HP/other indel-heavy"
+
+
+def zscore_columns(matrix: np.ndarray) -> np.ndarray:
+    if matrix.size == 0:
+        return matrix
+    means = matrix.mean(axis=0)
+    stds = matrix.std(axis=0)
+    stds[stds == 0.0] = 1.0
+    return (matrix - means) / stds
+
+
+def cluster_order(matrix: np.ndarray) -> tuple[list[int], object | None]:
+    if len(matrix) <= 2 or linkage is None or leaves_list is None:
+        return list(range(len(matrix))), None
+    model = linkage(matrix, method="average", metric="euclidean")
+    return [int(idx) for idx in leaves_list(model)], model
+
+
+def draw_base_sequence_heatmap(
+    ax,
+    kmers: list[str],
+    *,
+    x_labels: list[str] | None = None,
+    title: str | None = None,
+) -> None:
+    matrix = np.array(
+        [[BASE_TO_INDEX.get(base, np.nan) for base in kmer] for kmer in kmers],
+        dtype=float,
+    )
+    cmap = ListedColormap([BASE_COLORS[base] for base in BASES])
+    ax.imshow(matrix, aspect="auto", cmap=cmap, vmin=-0.5, vmax=3.5)
+    ax.set_xticks(list(range(matrix.shape[1])), x_labels or list(range(matrix.shape[1])))
+    ax.set_yticks(list(range(len(kmers))), kmers)
+    if title:
+        ax.set_title(title, loc="left", fontsize=12, fontweight="bold")
+    ax.set_xlabel("Position in read-oriented k-mer")
+    ax.set_ylabel("K-mer")
+    ax.tick_params(axis="both", length=0)
+    for y_idx, kmer in enumerate(kmers):
+        for x_idx, base in enumerate(kmer):
+            if base in BASE_TO_INDEX:
+                ax.text(x_idx, y_idx, base, ha="center", va="center", fontsize=8, color="white")
+
+
+def top_motif(rows: list[dict[str, str]]) -> tuple[str, int | None] | None:
+    for row in rows:
+        motif = row.get("motif", "")
+        if not motif:
+            continue
+        motif_type = row.get("motif_type", "")
+        if motif_type.startswith("offset_"):
+            try:
+                return motif, int(motif_type.split("_", 1)[1])
+            except ValueError:
+                return motif, None
+        return motif, None
+    return None
+
+
 def plot_context_error_classes(
     rows: list[dict[str, str]],
     out_dir: Path,
@@ -217,6 +317,256 @@ def plot_context_error_classes(
     return (
         "context_error_classes",
         save_figure(fig, out_dir, figure_stem(file_prefix, "context_error_classes"), formats),
+    )
+
+
+def plot_top_kmer_lollipop(
+    rows: list[dict[str, str]],
+    out_dir: Path,
+    formats: list[str],
+    label: str,
+    file_prefix: str,
+    min_intervals: int,
+    top_n: int,
+) -> tuple[str, list[Path]] | None:
+    rows = top_supported_risk_rows(rows, min_intervals, top_n)
+    if not rows:
+        return None
+
+    rows = list(reversed(rows))
+    labels = [row["kmer"] for row in rows]
+    values = [percent(f(row, "error_rate")) for row in rows]
+    categories = [dominant_error_label(row) for row in rows]
+    colors = {
+        "Mismatch-heavy": "#3B78E7",
+        "Non-HP indel-heavy": "#E07A5F",
+        "HP/other indel-heavy": "#8E5CF3",
+    }
+    y_positions = list(range(len(rows)))
+    fig, ax = plt.subplots(figsize=(8.2, max(4.8, 0.34 * len(rows) + 1.6)))
+    for y_pos, value, category in zip(y_positions, values, categories):
+        ax.hlines(y_pos, 0, value, color="#D0D5DD", linewidth=1.5)
+        ax.scatter(value, y_pos, s=70, color=colors[category], label=category, zorder=3)
+    ax.set_yticks(y_positions, labels)
+    configure_axes(
+        ax,
+        title=f"{label}: top high-risk k-mers",
+        xlabel="Error rate (%)",
+        ylabel="K-mer",
+    )
+    max_value = max(values) if values else 0.0
+    if max_value:
+        ax.set_xlim(0, max_value * 1.15)
+    for y_pos, row, value in zip(y_positions, rows, values):
+        ax.text(
+            value + max_value * 0.015,
+            y_pos,
+            f"risk {f(row, 'risk_score'):.2f}",
+            va="center",
+            fontsize=8,
+            color="#344054",
+        )
+
+    handles, labels_seen = ax.get_legend_handles_labels()
+    unique = dict(zip(labels_seen, handles))
+    ax.legend(unique.values(), unique.keys(), loc="lower right", frameon=False, fontsize=8)
+    return (
+        "top_kmer_lollipop",
+        save_figure(fig, out_dir, figure_stem(file_prefix, "top_kmer_lollipop"), formats),
+    )
+
+
+def plot_top_kmer_clustered_heatmap(
+    rows: list[dict[str, str]],
+    out_dir: Path,
+    formats: list[str],
+    label: str,
+    file_prefix: str,
+    min_intervals: int,
+    top_n: int,
+) -> tuple[str, list[Path]] | None:
+    rows = top_supported_risk_rows(rows, min_intervals, top_n)
+    if len(rows) < 2:
+        return None
+
+    feature_names = [
+        "Error rate",
+        "Risk",
+        "Mismatch frac",
+        "Indel frac",
+        "Non-HP indel frac",
+        "log10 intervals",
+    ]
+    feature_matrix = np.array(
+        [
+            [
+                f(row, "error_rate"),
+                f(row, "risk_score"),
+                f(row, "mismatch_fraction"),
+                f(row, "indel_fraction"),
+                f(row, "non_hp_indel_fraction"),
+                math.log10(i(row, "intervals") + 1),
+            ]
+            for row in rows
+        ],
+        dtype=float,
+    )
+    feature_z = zscore_columns(feature_matrix)
+    seq_matrix = []
+    for row in rows:
+        encoded = []
+        for base in row["kmer"]:
+            encoded.extend(1.0 if base == expected else 0.0 for expected in BASES)
+        seq_matrix.append(encoded)
+    cluster_matrix = np.concatenate([feature_z, 0.5 * np.array(seq_matrix, dtype=float)], axis=1)
+    order, model = cluster_order(cluster_matrix)
+    if model is not None and dendrogram is not None:
+        dendro_info = dendrogram(model, no_plot=True)
+        order = list(reversed([int(idx) for idx in dendro_info["leaves"]]))
+
+    ordered_rows = [rows[idx] for idx in order]
+    ordered_features = feature_z[order, :]
+    fig = plt.figure(figsize=(10.2, max(5.0, 0.34 * len(rows) + 1.8)))
+    grid = fig.add_gridspec(1, 3, width_ratios=[1.25, 4.8, 0.22], wspace=0.06)
+    ax_tree = fig.add_subplot(grid[0, 0])
+    ax_heatmap = fig.add_subplot(grid[0, 1])
+    ax_cbar = fig.add_subplot(grid[0, 2])
+
+    if model is not None and dendrogram is not None:
+        dendrogram(
+            model,
+            orientation="left",
+            no_labels=True,
+            color_threshold=0,
+            above_threshold_color="#667085",
+            ax=ax_tree,
+        )
+        ax_tree.invert_yaxis()
+    ax_tree.axis("off")
+
+    image = ax_heatmap.imshow(ordered_features, aspect="auto", cmap="coolwarm", vmin=-2.5, vmax=2.5)
+    ax_heatmap.set_title(
+        f"{label}: top k-mer error-profile clusters",
+        loc="left",
+        fontsize=12,
+        fontweight="bold",
+    )
+    ax_heatmap.set_xticks(list(range(len(feature_names))), feature_names, rotation=35, ha="right")
+    ax_heatmap.set_yticks(list(range(len(ordered_rows))), [row["kmer"] for row in ordered_rows])
+    ax_heatmap.tick_params(axis="both", length=0)
+    cbar = fig.colorbar(image, cax=ax_cbar)
+    cbar.set_label("Column z-score")
+
+    return (
+        "top_kmer_clustered_heatmap",
+        save_figure(fig, out_dir, figure_stem(file_prefix, "top_kmer_clustered_heatmap"), formats),
+    )
+
+
+def plot_top_kmer_sequence_heatmap(
+    rows: list[dict[str, str]],
+    out_dir: Path,
+    formats: list[str],
+    label: str,
+    file_prefix: str,
+    min_intervals: int,
+    top_n: int,
+) -> tuple[str, list[Path]] | None:
+    rows = top_supported_risk_rows(rows, min_intervals, top_n)
+    if not rows:
+        return None
+
+    kmers = [row["kmer"] for row in rows]
+    values = [percent(f(row, "error_rate")) for row in rows]
+    fig = plt.figure(figsize=(9.0, max(4.8, 0.34 * len(rows) + 1.6)))
+    grid = fig.add_gridspec(1, 2, width_ratios=[4.8, 1.5], wspace=0.06)
+    ax_seq = fig.add_subplot(grid[0, 0])
+    ax_bar = fig.add_subplot(grid[0, 1], sharey=ax_seq)
+    draw_base_sequence_heatmap(
+        ax_seq,
+        kmers,
+        title=f"{label}: top k-mer sequence composition",
+    )
+    ax_bar.barh(list(range(len(rows))), values, color="#3B78E7", height=0.72)
+    ax_bar.set_xlabel("Error rate (%)")
+    ax_bar.grid(True, axis="x", color="#D8DEE9", linewidth=0.6, alpha=0.8)
+    ax_bar.spines["top"].set_visible(False)
+    ax_bar.spines["right"].set_visible(False)
+    ax_bar.tick_params(axis="y", left=False, labelleft=False)
+    ax_bar.set_ylim(len(rows) - 0.5, -0.5)
+    return (
+        "top_kmer_sequence_heatmap",
+        save_figure(fig, out_dir, figure_stem(file_prefix, "top_kmer_sequence_heatmap"), formats),
+    )
+
+
+def plot_motif_aligned_contexts(
+    risk_rows: list[dict[str, str]],
+    motif_rows: list[dict[str, str]],
+    out_dir: Path,
+    formats: list[str],
+    label: str,
+    file_prefix: str,
+    min_intervals: int,
+    top_n: int,
+) -> tuple[str, list[Path]] | None:
+    motif_info = top_motif(motif_rows)
+    if motif_info is None:
+        return None
+    motif, fixed_offset = motif_info
+    rows = []
+    for row in top_supported_risk_rows(risk_rows, min_intervals, len(risk_rows)):
+        kmer = row["kmer"]
+        if fixed_offset is not None:
+            if kmer[fixed_offset : fixed_offset + len(motif)] == motif:
+                rows.append((row, fixed_offset))
+        else:
+            pos = kmer.find(motif)
+            if pos >= 0:
+                rows.append((row, pos))
+        if len(rows) >= top_n:
+            break
+    if not rows:
+        return None
+
+    max_left = max(pos for _, pos in rows)
+    max_right = max(len(row["kmer"]) - (pos + len(motif)) for row, pos in rows)
+    width = max_left + len(motif) + max_right
+    matrix = np.full((len(rows), width), np.nan)
+    labels = []
+    placed: list[tuple[int, int, str]] = []
+    for y_idx, (row, pos) in enumerate(rows):
+        start = max_left - pos
+        labels.append(f"{row['kmer']}  {percent(f(row, 'error_rate')):.1f}%")
+        for x_idx, base in enumerate(row["kmer"]):
+            out_x = start + x_idx
+            matrix[y_idx, out_x] = BASE_TO_INDEX.get(base, np.nan)
+            placed.append((y_idx, out_x, base))
+
+    cmap = ListedColormap([BASE_COLORS[base] for base in BASES])
+    cmap.set_bad("#FFFFFF")
+    x_labels = [str(idx - max_left) for idx in range(width)]
+    fig, ax = plt.subplots(figsize=(8.8, max(4.8, 0.34 * len(rows) + 1.6)))
+    ax.imshow(matrix, aspect="auto", cmap=cmap, vmin=-0.5, vmax=3.5)
+    ax.axvspan(max_left - 0.5, max_left + len(motif) - 0.5, color="#F2CC8F", alpha=0.28)
+    ax.set_title(
+        f"{label}: top contexts aligned on `{motif}`",
+        loc="left",
+        fontsize=12,
+        fontweight="bold",
+    )
+    ax.set_xticks(list(range(width)), x_labels)
+    ax.set_yticks(list(range(len(rows))), labels)
+    ax.set_xlabel("Position relative to motif start")
+    ax.set_ylabel("K-mer and error rate")
+    ax.tick_params(axis="both", length=0)
+    for y_idx, x_idx, base in placed:
+        if base in BASE_TO_INDEX:
+            ax.text(x_idx, y_idx, base, ha="center", va="center", fontsize=8, color="white")
+
+    return (
+        "motif_aligned_contexts",
+        save_figure(fig, out_dir, figure_stem(file_prefix, "motif_aligned_contexts"), formats),
     )
 
 
@@ -579,6 +929,7 @@ def plot_substitution_spectrum(
 
 def load_inputs(explore_dir: Path) -> dict[str, list[dict[str, str]]]:
     return {
+        "risk_ranked_kmers": read_csv(explore_dir / "risk_ranked_kmers.csv"),
         "rc_collapsed_kmers": read_csv(explore_dir / "rc_collapsed_kmers.csv"),
         "rc_pair_diagnostics": read_csv(explore_dir / "rc_pair_diagnostics.csv"),
         "rc_strand_mirror": read_csv(explore_dir / "rc_strand_mirror.csv"),
@@ -612,6 +963,10 @@ def write_manifest(
     path.parent.mkdir(parents=True, exist_ok=True)
     captions = {
         "context_error_classes": "Reverse-complement-collapsed k-mers ranked by error enrichment, with error classes stacked per k-mer interval.",
+        "top_kmer_lollipop": "High-risk raw k-mers ranked by error rate, colored by their dominant mismatch/indel behavior.",
+        "top_kmer_clustered_heatmap": "Top raw k-mers clustered by sequence and error-profile features, with a dendrogram when SciPy is available.",
+        "top_kmer_sequence_heatmap": "Base-by-position view of top raw k-mers with an adjacent error-rate bar.",
+        "motif_aligned_contexts": "Top high-risk k-mers containing the leading enriched motif, aligned to the motif start.",
         "rc_pair_asymmetry": "Direct comparison of each canonical k-mer with its reverse complement; points away from the diagonal mark orientation-specific context effects.",
         "rc_strand_mirror": "Reverse-complement pair differences split by alignment strand, useful for separating true pair asymmetry from ordinary strand bias.",
         "quality_calibration": "Predicted mean QV against empirical k-mer QV; points below the diagonal are overconfident contexts.",
@@ -675,12 +1030,14 @@ def write_manifest(
             "Recommended slide order:",
             "",
             f"1. Start with `{figure_stem(figure_prefix, 'context_error_classes')}`: it is the clearest anchor for the claim that sequencing errors are sequence-context dependent.",
-            f"2. Follow with `{figure_stem(figure_prefix, 'homopolymer_run_profile')}` to connect top contexts to platform-specific homopolymer behavior.",
-            f"3. Use `{figure_stem(figure_prefix, 'rc_pair_asymmetry')}` and `{figure_stem(figure_prefix, 'rc_strand_mirror')}` together: the pair scatter shows orientation asymmetry, while the mirror plot checks whether strand alone explains it.",
-            f"4. Use `{figure_stem(figure_prefix, 'quality_calibration')}` to show that context effects also affect predicted-vs-empirical quality.",
-            f"5. Use `{figure_stem(figure_prefix, 'motif_enrichment')}` as a discovery slide for compact sequence signatures.",
-            f"6. Use `{figure_stem(figure_prefix, 'substitution_spectrum')}` as supporting detail unless substitution bias is the dominant platform signal.",
-            f"7. Use `{figure_stem(figure_prefix, 'offset_base_error_heatmap')}` as an optional bridge slide when explaining how BEST can move from k-mer-level summaries to offset/base-level summaries.",
+            f"2. Use `{figure_stem(figure_prefix, 'top_kmer_lollipop')}` and `{figure_stem(figure_prefix, 'top_kmer_sequence_heatmap')}` to make the actual top k-mer sequences visible.",
+            f"3. Use `{figure_stem(figure_prefix, 'top_kmer_clustered_heatmap')}` when you want to show that the top contexts form feature/sequence groups rather than isolated anecdotes.",
+            f"4. Follow with `{figure_stem(figure_prefix, 'homopolymer_run_profile')}` to connect top contexts to platform-specific homopolymer behavior.",
+            f"5. Use `{figure_stem(figure_prefix, 'motif_aligned_contexts')}` and `{figure_stem(figure_prefix, 'motif_enrichment')}` as discovery slides for compact sequence signatures.",
+            f"6. Use `{figure_stem(figure_prefix, 'rc_pair_asymmetry')}` and `{figure_stem(figure_prefix, 'rc_strand_mirror')}` together: the pair scatter shows orientation asymmetry, while the mirror plot checks whether strand alone explains it.",
+            f"7. Use `{figure_stem(figure_prefix, 'quality_calibration')}` to show that context effects also affect predicted-vs-empirical quality.",
+            f"8. Use `{figure_stem(figure_prefix, 'substitution_spectrum')}` as supporting detail unless substitution bias is the dominant platform signal.",
+            f"9. Use `{figure_stem(figure_prefix, 'offset_base_error_heatmap')}` as an optional bridge slide when explaining how BEST can move from k-mer-level summaries to offset/base-level summaries.",
             "",
             "Slide design notes:",
             "",
@@ -703,6 +1060,43 @@ def main() -> int:
     plotters = [
         plot_context_error_classes(
             inputs["rc_collapsed_kmers"],
+            out_dir,
+            args.formats,
+            args.label,
+            args.figure_prefix,
+            args.min_intervals,
+            args.top_n,
+        ),
+        plot_top_kmer_lollipop(
+            inputs["risk_ranked_kmers"],
+            out_dir,
+            args.formats,
+            args.label,
+            args.figure_prefix,
+            args.min_intervals,
+            args.top_n,
+        ),
+        plot_top_kmer_clustered_heatmap(
+            inputs["risk_ranked_kmers"],
+            out_dir,
+            args.formats,
+            args.label,
+            args.figure_prefix,
+            args.min_intervals,
+            args.top_n,
+        ),
+        plot_top_kmer_sequence_heatmap(
+            inputs["risk_ranked_kmers"],
+            out_dir,
+            args.formats,
+            args.label,
+            args.figure_prefix,
+            args.min_intervals,
+            args.top_n,
+        ),
+        plot_motif_aligned_contexts(
+            inputs["risk_ranked_kmers"],
+            inputs["motif_enrichment"],
             out_dir,
             args.formats,
             args.label,
