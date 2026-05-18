@@ -106,6 +106,13 @@ To include the per-offset k-mer summary:
 best -t 4 --intervals-kmer 7 --no-feature-qual-score-stats --kmer-position-stats -- aln.bam ref.fasta.gz output
 ```
 
+Use `--kmer-advanced-stats` when substitution identity or strand asymmetry is
+scientifically important. This writes `output.summary_kmer_strand_stats.csv`,
+`output.summary_kmer_substitution_stats.csv`, and
+`output.summary_kmer_substitution_profile_stats.csv`. Substitution bases are
+reported in the same read-oriented frame as the k-mer labels. The detailed
+substitution table can be large for high k values, so this mode is opt-in.
+
 BEST processes BAM records in parallel batches. The default batch size is 64
 records, which reduces scheduler overhead for high-thread k-mer runs while
 keeping memory use bounded. Use `--record-batch-size` to tune this when
@@ -145,6 +152,28 @@ from an existing `benchmark_results.csv` without rerunning BEST.
 On the available 5.0 GiB HPRC HG002 downsampled BAM, the fastest k7 aggregate
 setting in this matrix was `--record-batch-size 64 --bam-reader-threads 8`.
 The current full-downsample benchmark notes are in `docs/kmer_benchmarks.md`.
+
+## K-mer Exploration Reports
+
+Use `scripts/kmer_explore.py` to turn one or more BEST k-mer output prefixes
+into scientific summary tables and a Markdown report. The script consumes
+existing CSVs; it does not reread the BAM.
+
+```
+python3 scripts/kmer_explore.py \
+    --prefix output \
+    --label ont_duplex_v1 \
+    --out-dir target/tmp/kmer_explore \
+    --min-intervals 1000 \
+    --top-n 50
+```
+
+The report includes k-mer error enrichment, quality calibration by context,
+homopolymer phase profiles, per-offset heatmap-ready tables, model-free motif
+enrichment, consensus-risk ranked k-mers, replicate reliability when multiple
+prefixes are supplied, and strand/substitution summaries when
+`--kmer-advanced-stats` outputs are present. See `docs/kmer_exploration.md`
+for output descriptions and interpretation notes.
 
 ## Help Message:
 ```
@@ -227,6 +256,13 @@ OPTIONS:
             Write summary_kmer_position_stats.csv for optimized k-mer runs.
 
             This adds per-offset error counts within each read-oriented k-mer.
+
+        --kmer-advanced-stats
+            Write strand and substitution spectrum summaries for optimized k-mer runs.
+
+            This adds summary_kmer_strand_stats.csv,
+            summary_kmer_substitution_stats.csv, and
+            summary_kmer_substitution_profile_stats.csv.
 
         --record-batch-size <RECORD_BATCH_SIZE>
             Number of records to hand to each Rayon task.

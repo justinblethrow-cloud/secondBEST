@@ -33,6 +33,9 @@ SUMMARY_FILES = [
     "summary_kmer_stats.csv",
     "summary_kmer_length_stats.csv",
     "summary_kmer_context_stats.csv",
+    "summary_kmer_strand_stats.csv",
+    "summary_kmer_substitution_stats.csv",
+    "summary_kmer_substitution_profile_stats.csv",
     "summary_kmer_position_stats.csv",
     "summary_kmer_position_profile_stats.csv",
     "summary_cigar_stats.csv",
@@ -48,6 +51,7 @@ CSV_FIELDS = [
     "mode",
     "kmer_len",
     "position_stats",
+    "advanced_stats",
     "threads",
     "record_batch_size",
     "bam_reader_threads",
@@ -138,6 +142,11 @@ def parse_args() -> argparse.Namespace:
         "--no-position-modes",
         action="store_true",
         help="Skip k-mer runs with --kmer-position-stats",
+    )
+    parser.add_argument(
+        "--advanced-stats",
+        action="store_true",
+        help="Add --kmer-advanced-stats to k-mer benchmark runs",
     )
     parser.add_argument(
         "--no-baseline",
@@ -304,6 +313,7 @@ def build_command(
     output_prefix: Path,
     kmer_len: int | None,
     position_stats: bool,
+    advanced_stats: bool,
 ) -> list[str]:
     command = [
         str(best),
@@ -318,6 +328,8 @@ def build_command(
     ]
     if position_stats:
         command.append("--kmer-position-stats")
+    if advanced_stats and kmer_len is not None:
+        command.append("--kmer-advanced-stats")
     if kmer_len is not None:
         command.extend(["--intervals-kmer", str(kmer_len)])
     command.extend(["--", str(bam), str(reference), str(output_prefix)])
@@ -336,6 +348,7 @@ def run_one(
     mode: str,
     kmer_len: int | None,
     position_stats: bool,
+    advanced_stats: bool,
     threads: int,
     record_batch_size: int,
     bam_reader_threads: int,
@@ -353,6 +366,7 @@ def run_one(
         output_prefix,
         kmer_len,
         position_stats,
+        advanced_stats,
     )
     timed_command = ["/usr/bin/time", "-v", *command]
     row = {
@@ -362,6 +376,7 @@ def run_one(
         "mode": mode,
         "kmer_len": "" if kmer_len is None else str(kmer_len),
         "position_stats": str(position_stats).lower(),
+        "advanced_stats": str(advanced_stats and kmer_len is not None).lower(),
         "threads": str(threads),
         "record_batch_size": str(record_batch_size),
         "bam_reader_threads": str(bam_reader_threads),
@@ -451,28 +466,32 @@ def fmt_float(value: float | None, digits: int = 2) -> str:
     return f"{value:.{digits}f}"
 
 
-def group_key(row: dict[str, str]) -> tuple[str, str, str, str, str, str]:
+def group_key(row: dict[str, str]) -> tuple[str, str, str, str, str, str, str]:
     return (
         row.get("mode", ""),
         row.get("kmer_len", ""),
         row.get("position_stats", ""),
+        row.get("advanced_stats", "false"),
         row.get("threads", ""),
         row.get("record_batch_size", ""),
         row.get("bam_reader_threads", ""),
     )
 
 
-def mode_key(row: dict[str, str]) -> tuple[str, str, str]:
+def mode_key(row: dict[str, str]) -> tuple[str, str, str, str]:
     return (
         row.get("mode", ""),
         row.get("kmer_len", ""),
         row.get("position_stats", ""),
+        row.get("advanced_stats", "false"),
     )
 
 
 def summarize_rows(rows: list[dict[str, str]]) -> dict[str, object]:
     successful = [row for row in rows if row.get("exit_status") == "0"]
-    grouped: dict[tuple[str, str, str, str, str, str], list[dict[str, str]]] = defaultdict(list)
+    grouped: dict[tuple[str, str, str, str, str, str, str], list[dict[str, str]]] = defaultdict(
+        list
+    )
     for row in successful:
         grouped[group_key(row)].append(row)
 
@@ -492,9 +511,10 @@ def summarize_rows(rows: list[dict[str, str]]) -> dict[str, object]:
                 "mode": key[0],
                 "kmer_len": key[1],
                 "position_stats": key[2],
-                "threads": key[3],
-                "record_batch_size": key[4],
-                "bam_reader_threads": key[5],
+                "advanced_stats": key[3],
+                "threads": key[4],
+                "record_batch_size": key[5],
+                "bam_reader_threads": key[6],
                 "runs": len(members),
                 "elapsed_median_seconds": median(elapsed),
                 "elapsed_min_seconds": min(elapsed) if elapsed else None,
@@ -512,6 +532,7 @@ def summarize_rows(rows: list[dict[str, str]]) -> dict[str, object]:
             row["mode"],
             safe_int(str(row["kmer_len"])) or -1,
             row["position_stats"],
+            row["advanced_stats"],
             safe_int(str(row["threads"])) or -1,
             safe_int(str(row["record_batch_size"])) or -1,
             safe_int(str(row["bam_reader_threads"])) or -1,
@@ -519,10 +540,15 @@ def summarize_rows(rows: list[dict[str, str]]) -> dict[str, object]:
     )
 
     best_by_mode = []
-    single_thread_best: dict[tuple[str, str, str], dict[str, object]] = {}
-    groups_by_mode: dict[tuple[str, str, str], list[dict[str, object]]] = defaultdict(list)
+    single_thread_best: dict[tuple[str, str, str, str], dict[str, object]] = {}
+    groups_by_mode: dict[tuple[str, str, str, str], list[dict[str, object]]] = defaultdict(list)
     for group in groups:
-        key = (str(group["mode"]), str(group["kmer_len"]), str(group["position_stats"]))
+        key = (
+            str(group["mode"]),
+            str(group["kmer_len"]),
+            str(group["position_stats"]),
+            str(group["advanced_stats"]),
+        )
         groups_by_mode[key].append(group)
         if group["threads"] == "1":
             current = single_thread_best.get(key)
@@ -541,7 +567,7 @@ def summarize_rows(rows: list[dict[str, str]]) -> dict[str, object]:
 
     best_by_mode.sort(key=lambda row: (str(row["mode"]), str(row["kmer_len"])))
 
-    signatures_by_mode: dict[tuple[str, str, str], set[str]] = defaultdict(set)
+    signatures_by_mode: dict[tuple[str, str, str, str], set[str]] = defaultdict(set)
     for row in successful:
         if row.get("output_signature"):
             signatures_by_mode[mode_key(row)].add(row["output_signature"])
@@ -551,6 +577,7 @@ def summarize_rows(rows: list[dict[str, str]]) -> dict[str, object]:
             "mode": key[0],
             "kmer_len": key[1],
             "position_stats": key[2],
+            "advanced_stats": key[3],
             "output_signature_count": len(signatures),
             "consistent": len(signatures) <= 1,
         }
@@ -685,6 +712,7 @@ def render_report(
                 str(row["mode"]),
                 str(row["kmer_len"]),
                 str(row["position_stats"]),
+                str(row.get("advanced_stats", "false")),
                 str(row["threads"]),
                 str(row["record_batch_size"]),
                 str(row["bam_reader_threads"]),
@@ -704,6 +732,7 @@ def render_report(
                 "Mode",
                 "k",
                 "Position",
+                "Advanced",
                 "Threads",
                 "Batch",
                 "BGZF",
@@ -728,6 +757,7 @@ def render_report(
                 str(row["mode"]),
                 str(row["kmer_len"]),
                 str(row["position_stats"]),
+                str(row.get("advanced_stats", "false")),
                 str(row["output_signature_count"]),
                 "yes" if row["consistent"] else "no",
             ]
@@ -740,7 +770,7 @@ def render_report(
             "Output signatures hash all generated summary CSVs for a run after normalizing floating-point fields to 5 decimal places. For a fixed mode, signatures should match across thread, batch, BGZF, and repeat settings while preserving integer/count differences.",
             "",
             markdown_table(
-                ["Mode", "k", "Position", "Unique signatures", "Consistent"],
+                ["Mode", "k", "Position", "Advanced", "Unique signatures", "Consistent"],
                 consistency_rows,
             )
             if consistency_rows
@@ -761,6 +791,7 @@ def render_report(
                 str(row["mode"]),
                 str(row["kmer_len"]),
                 str(row["position_stats"]),
+                str(row.get("advanced_stats", "false")),
                 str(row["threads"]),
                 str(row["record_batch_size"]),
                 str(row["bam_reader_threads"]),
@@ -780,6 +811,7 @@ def render_report(
                 "Mode",
                 "k",
                 "Position",
+                "Advanced",
                 "Threads",
                 "Batch",
                 "BGZF",
@@ -820,6 +852,8 @@ def proof_statements(meta: dict[str, object], summary: dict[str, object]) -> lis
             f"--record-batch-size {row['record_batch_size']}, and "
             f"--bam-reader-threads {row['bam_reader_threads']}."
         )
+        if row.get("advanced_stats") == "true":
+            statement += " Advanced k-mer statistics were enabled."
         speedup = row.get("speedup_vs_best_1_thread")
         if isinstance(speedup, float):
             statement += f" This was {speedup:.2f}x faster than the best single-thread run."
@@ -891,6 +925,7 @@ def main() -> int:
                                     mode,
                                     kmer_len,
                                     position_stats,
+                                    args.advanced_stats,
                                     thread_count,
                                     record_batch_size,
                                     bam_reader_threads,

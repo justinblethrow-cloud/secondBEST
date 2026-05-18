@@ -24,6 +24,7 @@ pub const MAX_ENCODED_KMER_LEN: usize = 32;
 type KmerKey = (usize, u64);
 const INVALID_STAT_IDX: usize = usize::MAX;
 const MAX_DENSE_KMER_STATES: usize = 1 << 18;
+const BASES: [u8; 4] = [b'A', b'C', b'G', b'T'];
 
 struct KmerWindowContext {
     kmer_len: usize,
@@ -128,10 +129,12 @@ impl KmerPositionStats {
 struct KmerStats {
     aggregate: FeatureStats,
     positions: Vec<KmerPositionStats>,
+    strands: Vec<FeatureStats>,
+    substitutions: Vec<[usize; 16]>,
 }
 
 impl KmerStats {
-    fn new(kmer_len: usize, track_position_stats: bool) -> Self {
+    fn new(kmer_len: usize, track_position_stats: bool, track_advanced_stats: bool) -> Self {
         let positions = if track_position_stats {
             (0..kmer_len)
                 .map(|_| KmerPositionStats::default())
@@ -139,9 +142,21 @@ impl KmerStats {
         } else {
             Vec::new()
         };
+        let strands = if track_advanced_stats {
+            vec![FeatureStats::new(false), FeatureStats::new(false)]
+        } else {
+            Vec::new()
+        };
+        let substitutions = if track_advanced_stats {
+            vec![[0usize; 16]; kmer_len]
+        } else {
+            Vec::new()
+        };
         Self {
             aggregate: FeatureStats::new(false),
             positions,
+            strands,
+            substitutions,
         }
     }
 
@@ -151,6 +166,19 @@ impl KmerStats {
             .iter_mut()
             .zip(o.positions)
             .for_each(|(stats, other_stats)| stats.assign_add(other_stats));
+        self.strands
+            .iter_mut()
+            .zip(o.strands)
+            .for_each(|(stats, other_stats)| stats.assign_add(&other_stats));
+        self.substitutions
+            .iter_mut()
+            .zip(o.substitutions)
+            .for_each(|(counts, other_counts)| {
+                counts
+                    .iter_mut()
+                    .zip(other_counts)
+                    .for_each(|(count, other_count)| *count += other_count);
+            });
     }
 }
 
@@ -161,6 +189,7 @@ pub struct KmerSummary {
     dense_kmer_index: FxHashMap<usize, Vec<usize>>,
     kmer_stats: Vec<(KmerKey, KmerStats)>,
     track_position_stats: bool,
+    track_advanced_stats: bool,
 }
 
 struct KmerContextAggregate {
@@ -184,11 +213,19 @@ struct KmerPositionProfileAggregate {
     stats: KmerPositionStats,
 }
 
+#[derive(Default)]
+struct KmerSubstitutionProfileAggregate {
+    kmers: usize,
+    intervals: usize,
+    count: usize,
+}
+
 impl KmerSummary {
     pub fn new(
         mut name_column: Option<String>,
         kmer_lens: Vec<usize>,
         track_position_stats: bool,
+        track_advanced_stats: bool,
     ) -> Self {
         if let Some(ref mut name) = name_column {
             name.push(',');
@@ -200,6 +237,7 @@ impl KmerSummary {
             kmer_index: FxHashMap::default(),
             kmer_stats: Vec::new(),
             track_position_stats,
+            track_advanced_stats,
         }
     }
 
@@ -259,20 +297,21 @@ impl KmerSummary {
         q_scores: &sam::record::QualityScores,
         cigar: &sam::record::Cigar,
         mut ref_pos: usize,
-        _strand_rev: bool,
+        strand_rev: bool,
         contexts: &mut [KmerWindowContext],
     ) {
         let mut query_pos = 1;
+        let strand_idx = strand_idx(strand_rev);
 
         for op in cigar.iter() {
             for _i in 0..op.len() {
                 match op.kind() {
                     Kind::SequenceMatch | Kind::SequenceMismatch | Kind::Match => {
                         let c = ref_base(curr_ref_seq, ref_pos);
+                        let query_base = u8::from(sequence[Position::new(query_pos).unwrap()])
+                            .to_ascii_uppercase();
                         let is_match = op.kind() == Kind::SequenceMatch
-                            || (op.kind() == Kind::Match
-                                && c == u8::from(sequence[Position::new(query_pos).unwrap()])
-                                    .to_ascii_uppercase());
+                            || (op.kind() == Kind::Match && c == query_base);
                         let q_score = u8::from(q_scores[Position::new(query_pos).unwrap()]);
                         let qual_error = qual_to_error(q_score);
 
@@ -283,10 +322,28 @@ impl KmerSummary {
                                     if stat_idx != INVALID_STAT_IDX {
                                         let stats = &mut self.kmer_stats[stat_idx].1;
                                         stats.aggregate.total_qual_error += qual_error;
+                                        if self.track_advanced_stats {
+                                            stats.strands[strand_idx].total_qual_error +=
+                                                qual_error;
+                                        }
                                         if is_match {
                                             stats.aggregate.matches += 1;
+                                            if self.track_advanced_stats {
+                                                stats.strands[strand_idx].matches += 1;
+                                            }
                                         } else {
                                             stats.aggregate.mismatches += 1;
+                                            if self.track_advanced_stats {
+                                                stats.strands[strand_idx].mismatches += 1;
+                                                let offset = context
+                                                    .read_oriented_offset(idx, ref_pos, strand_rev);
+                                                if let Some(sub_idx) = substitution_idx(
+                                                    read_oriented_base(c, strand_rev),
+                                                    read_oriented_base(query_base, strand_rev),
+                                                ) {
+                                                    stats.substitutions[offset][sub_idx] += 1;
+                                                }
+                                            }
                                             context.has_error[idx] = true;
                                         }
                                     }
@@ -321,8 +378,14 @@ impl KmerSummary {
                                         let stats = &mut self.kmer_stats[stat_idx].1;
                                         if hp_before || hp_after {
                                             stats.aggregate.hp_ins += op.len();
+                                            if self.track_advanced_stats {
+                                                stats.strands[strand_idx].hp_ins += op.len();
+                                            }
                                         } else {
                                             stats.aggregate.non_hp_ins += op.len();
+                                            if self.track_advanced_stats {
+                                                stats.strands[strand_idx].non_hp_ins += op.len();
+                                            }
                                         }
                                         context.has_error[idx] = true;
                                     }
@@ -349,8 +412,14 @@ impl KmerSummary {
                                         let stats = &mut self.kmer_stats[stat_idx].1;
                                         if hp {
                                             stats.aggregate.hp_del += 1;
+                                            if self.track_advanced_stats {
+                                                stats.strands[strand_idx].hp_del += 1;
+                                            }
                                         } else {
                                             stats.aggregate.non_hp_del += 1;
+                                            if self.track_advanced_stats {
+                                                stats.strands[strand_idx].non_hp_del += 1;
+                                            }
                                         }
                                         context.has_error[idx] = true;
                                     }
@@ -375,7 +444,7 @@ impl KmerSummary {
             }
         }
 
-        self.add_identical_overlaps(contexts);
+        self.add_identical_overlaps(contexts, strand_idx);
     }
 
     fn update_record_with_positions(
@@ -389,16 +458,17 @@ impl KmerSummary {
         contexts: &mut [KmerWindowContext],
     ) {
         let mut query_pos = 1;
+        let strand_idx = strand_idx(strand_rev);
 
         for op in cigar.iter() {
             for _i in 0..op.len() {
                 match op.kind() {
                     Kind::SequenceMatch | Kind::SequenceMismatch | Kind::Match => {
                         let c = ref_base(curr_ref_seq, ref_pos);
+                        let query_base = u8::from(sequence[Position::new(query_pos).unwrap()])
+                            .to_ascii_uppercase();
                         let is_match = op.kind() == Kind::SequenceMatch
-                            || (op.kind() == Kind::Match
-                                && c == u8::from(sequence[Position::new(query_pos).unwrap()])
-                                    .to_ascii_uppercase());
+                            || (op.kind() == Kind::Match && c == query_base);
                         let q_score = u8::from(q_scores[Position::new(query_pos).unwrap()]);
                         let qual_error = qual_to_error(q_score);
 
@@ -409,13 +479,29 @@ impl KmerSummary {
                                     if stat_idx != INVALID_STAT_IDX {
                                         let stats = &mut self.kmer_stats[stat_idx].1;
                                         stats.aggregate.total_qual_error += qual_error;
+                                        if self.track_advanced_stats {
+                                            stats.strands[strand_idx].total_qual_error +=
+                                                qual_error;
+                                        }
                                         if is_match {
                                             stats.aggregate.matches += 1;
+                                            if self.track_advanced_stats {
+                                                stats.strands[strand_idx].matches += 1;
+                                            }
                                         } else {
                                             stats.aggregate.mismatches += 1;
                                             let offset = context
                                                 .read_oriented_offset(idx, ref_pos, strand_rev);
                                             stats.positions[offset].mismatches += 1;
+                                            if self.track_advanced_stats {
+                                                stats.strands[strand_idx].mismatches += 1;
+                                                if let Some(sub_idx) = substitution_idx(
+                                                    read_oriented_base(c, strand_rev),
+                                                    read_oriented_base(query_base, strand_rev),
+                                                ) {
+                                                    stats.substitutions[offset][sub_idx] += 1;
+                                                }
+                                            }
                                             context.has_error[idx] = true;
                                         }
                                     }
@@ -453,9 +539,15 @@ impl KmerSummary {
                                         if hp_before || hp_after {
                                             stats.aggregate.hp_ins += op.len();
                                             stats.positions[offset].hp_ins += op.len();
+                                            if self.track_advanced_stats {
+                                                stats.strands[strand_idx].hp_ins += op.len();
+                                            }
                                         } else {
                                             stats.aggregate.non_hp_ins += op.len();
                                             stats.positions[offset].non_hp_ins += op.len();
+                                            if self.track_advanced_stats {
+                                                stats.strands[strand_idx].non_hp_ins += op.len();
+                                            }
                                         }
                                         context.has_error[idx] = true;
                                     }
@@ -485,9 +577,15 @@ impl KmerSummary {
                                         if hp {
                                             stats.aggregate.hp_del += 1;
                                             stats.positions[offset].hp_del += 1;
+                                            if self.track_advanced_stats {
+                                                stats.strands[strand_idx].hp_del += 1;
+                                            }
                                         } else {
                                             stats.aggregate.non_hp_del += 1;
                                             stats.positions[offset].non_hp_del += 1;
+                                            if self.track_advanced_stats {
+                                                stats.strands[strand_idx].non_hp_del += 1;
+                                            }
                                         }
                                         context.has_error[idx] = true;
                                     }
@@ -526,15 +624,19 @@ impl KmerSummary {
             }
         }
 
-        self.add_identical_overlaps(contexts);
+        self.add_identical_overlaps(contexts, strand_idx);
     }
 
-    fn add_identical_overlaps(&mut self, contexts: &[KmerWindowContext]) {
+    fn add_identical_overlaps(&mut self, contexts: &[KmerWindowContext], strand_idx: usize) {
         for context in contexts {
             for (idx, stat_idx) in context.stat_idxs.iter().enumerate() {
                 if *stat_idx != INVALID_STAT_IDX {
                     if !context.has_error[idx] {
-                        self.kmer_stats[*stat_idx].1.aggregate.identical_overlaps += 1;
+                        let stats = &mut self.kmer_stats[*stat_idx].1;
+                        stats.aggregate.identical_overlaps += 1;
+                        if self.track_advanced_stats {
+                            stats.strands[strand_idx].identical_overlaps += 1;
+                        }
                     }
                 }
             }
@@ -569,8 +671,10 @@ impl KmerSummary {
 
     fn push_stat(&mut self, key: KmerKey) -> usize {
         let stat_idx = self.kmer_stats.len();
-        self.kmer_stats
-            .push((key, KmerStats::new(key.0, self.track_position_stats)));
+        self.kmer_stats.push((
+            key,
+            KmerStats::new(key.0, self.track_position_stats, self.track_advanced_stats),
+        ));
         stat_idx
     }
 
@@ -595,6 +699,18 @@ impl KmerSummary {
 
     pub fn context_summary(&self) -> KmerContextSummary {
         KmerContextSummary { summary: self }
+    }
+
+    pub fn strand_summary(&self) -> KmerStrandSummary {
+        KmerStrandSummary { summary: self }
+    }
+
+    pub fn substitution_summary(&self) -> KmerSubstitutionSummary {
+        KmerSubstitutionSummary { summary: self }
+    }
+
+    pub fn substitution_profile_summary(&self) -> KmerSubstitutionProfileSummary {
+        KmerSubstitutionProfileSummary { summary: self }
     }
 
     pub fn position_summary(&self) -> KmerPositionSummary {
@@ -675,7 +791,11 @@ impl KmerSummary {
                                 self.get_or_insert_sparse_stat_idx((kmer_len, key_bits))
                             };
                             context.stat_idxs[idx] = stat_idx;
-                            self.kmer_stats[stat_idx].1.aggregate.overlaps += 1;
+                            let stats = &mut self.kmer_stats[stat_idx].1;
+                            stats.aggregate.overlaps += 1;
+                            if self.track_advanced_stats {
+                                stats.strands[strand_idx(strand_rev)].overlaps += 1;
+                            }
                             has_valid_kmers = true;
                         }
                     }
@@ -711,6 +831,18 @@ pub struct KmerLengthSummary<'a> {
 }
 
 pub struct KmerContextSummary<'a> {
+    summary: &'a KmerSummary,
+}
+
+pub struct KmerStrandSummary<'a> {
+    summary: &'a KmerSummary,
+}
+
+pub struct KmerSubstitutionSummary<'a> {
+    summary: &'a KmerSummary,
+}
+
+pub struct KmerSubstitutionProfileSummary<'a> {
     summary: &'a KmerSummary,
 }
 
@@ -895,6 +1027,165 @@ impl fmt::Display for KmerContextSummary<'_> {
     }
 }
 
+impl fmt::Display for KmerStrandSummary<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        writeln!(f, "{}kmer_len,kmer,strand,intervals,identical_intervals,identity,identity_qv,mean_qual,bases_per_interval,matches_per_interval,mismatches_per_interval,non_hp_ins_per_interval,non_hp_del_per_interval,hp_ins_per_interval,hp_del_per_interval", if self.summary.name_column.is_some() { "name," } else { "" })?;
+        let mut rows = Vec::new();
+        for ((k, bits), stats) in &self.summary.kmer_stats {
+            let kmer = decode_kmer(*k, *bits);
+            for (strand_idx, strand_stats) in stats.strands.iter().enumerate() {
+                if strand_stats.overlaps > 0 {
+                    rows.push((*k, kmer.clone(), strand_idx, strand_stats));
+                }
+            }
+        }
+        rows.sort_by(|a, b| (a.0, &a.1, a.2).cmp(&(b.0, &b.1, b.2)));
+
+        for (kmer_len, kmer, strand_idx, stats) in rows {
+            write!(
+                f,
+                "{}{},{},{},",
+                self.summary
+                    .name_column
+                    .as_ref()
+                    .map(|n| n.as_str())
+                    .unwrap_or(""),
+                kmer_len,
+                kmer,
+                strand_label(strand_idx)
+            )?;
+            write_aggregate_metrics(f, stats)?;
+            writeln!(f)?;
+        }
+
+        Ok(())
+    }
+}
+
+impl fmt::Display for KmerSubstitutionSummary<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        writeln!(f, "{}kmer_len,kmer,offset,ref_base,read_base,count,rate_per_interval,fraction_of_kmer_mismatches", if self.summary.name_column.is_some() { "name," } else { "" })?;
+        let mut rows = Vec::new();
+        for ((k, bits), stats) in &self.summary.kmer_stats {
+            let kmer = decode_kmer(*k, *bits);
+            let total_substitutions = stats
+                .substitutions
+                .iter()
+                .flat_map(|counts| counts.iter())
+                .sum::<usize>();
+            for (offset, counts) in stats.substitutions.iter().enumerate() {
+                for (sub_idx, count) in counts.iter().enumerate() {
+                    if *count > 0 {
+                        let (ref_base, read_base) = substitution_bases(sub_idx);
+                        rows.push((
+                            *k,
+                            kmer.clone(),
+                            offset,
+                            ref_base,
+                            read_base,
+                            *count,
+                            stats.aggregate.overlaps,
+                            total_substitutions,
+                        ));
+                    }
+                }
+            }
+        }
+        rows.sort_by(|a, b| (a.0, &a.1, a.2, a.3, a.4).cmp(&(b.0, &b.1, b.2, b.3, b.4)));
+
+        for (kmer_len, kmer, offset, ref_base, read_base, count, intervals, total_substitutions) in
+            rows
+        {
+            let rate = (count as f64) / (intervals as f64);
+            let fraction = if total_substitutions == 0 {
+                0.0
+            } else {
+                (count as f64) / (total_substitutions as f64)
+            };
+            writeln!(
+                f,
+                "{}{},{},{},{},{},{},{:.8},{:.8}",
+                self.summary
+                    .name_column
+                    .as_ref()
+                    .map(|n| n.as_str())
+                    .unwrap_or(""),
+                kmer_len,
+                kmer,
+                offset,
+                ref_base as char,
+                read_base as char,
+                count,
+                rate,
+                fraction
+            )?;
+        }
+
+        Ok(())
+    }
+}
+
+impl fmt::Display for KmerSubstitutionProfileSummary<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        writeln!(
+            f,
+            "{}kmer_len,offset,ref_base,read_base,kmers,intervals,count,rate_per_interval",
+            if self.summary.name_column.is_some() {
+                "name,"
+            } else {
+                ""
+            }
+        )?;
+        let mut rows: BTreeMap<(usize, usize, u8, u8), KmerSubstitutionProfileAggregate> =
+            BTreeMap::new();
+        for ((k, bits), stats) in &self.summary.kmer_stats {
+            let kmer = decode_kmer(*k, *bits);
+            for (offset, counts) in stats.substitutions.iter().enumerate() {
+                let ref_base = kmer.as_bytes()[offset];
+                for read_base in BASES {
+                    if read_base == ref_base {
+                        continue;
+                    }
+                    let Some(sub_idx) = substitution_idx(ref_base, read_base) else {
+                        continue;
+                    };
+                    let row = rows.entry((*k, offset, ref_base, read_base)).or_default();
+                    row.kmers += 1;
+                    row.intervals += stats.aggregate.overlaps;
+                    row.count += counts[sub_idx];
+                }
+            }
+        }
+
+        for ((kmer_len, offset, ref_base, read_base), row) in rows {
+            let rate = if row.intervals == 0 {
+                0.0
+            } else {
+                (row.count as f64) / (row.intervals as f64)
+            };
+            writeln!(
+                f,
+                "{}{},{},{},{},{},{},{},{:.8}",
+                self.summary
+                    .name_column
+                    .as_ref()
+                    .map(|n| n.as_str())
+                    .unwrap_or(""),
+                kmer_len,
+                offset,
+                ref_base as char,
+                read_base as char,
+                row.kmers,
+                row.intervals,
+                row.count,
+                rate
+            )?;
+        }
+
+        Ok(())
+    }
+}
+
 impl fmt::Display for KmerPositionSummary<'_> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         writeln!(f, "{}kmer_len,kmer,offset,kmer_base,intervals,identity,identity_qv,matches,mismatches,non_hp_ins,non_hp_del,hp_ins,hp_del,skips,error_rate", if self.summary.name_column.is_some() { "name," } else { "" })?;
@@ -1056,6 +1347,46 @@ fn is_reverse_complement_palindrome(bases: &[u8]) -> bool {
         .iter()
         .zip(bases.iter().rev())
         .all(|(&lhs, &rhs)| complement_base(lhs) == rhs)
+}
+
+fn strand_idx(strand_rev: bool) -> usize {
+    usize::from(strand_rev)
+}
+
+fn strand_label(strand_idx: usize) -> &'static str {
+    match strand_idx {
+        0 => "forward",
+        1 => "reverse",
+        _ => unreachable!(),
+    }
+}
+
+fn read_oriented_base(base: u8, strand_rev: bool) -> u8 {
+    if strand_rev {
+        complement_base(base)
+    } else {
+        base
+    }
+}
+
+fn substitution_idx(ref_base: u8, read_base: u8) -> Option<usize> {
+    let ref_idx = base_idx(ref_base)?;
+    let read_idx = base_idx(read_base)?;
+    Some(ref_idx * 4 + read_idx)
+}
+
+fn substitution_bases(idx: usize) -> (u8, u8) {
+    (BASES[idx / 4], BASES[idx % 4])
+}
+
+fn base_idx(base: u8) -> Option<usize> {
+    match base {
+        b'A' => Some(0),
+        b'C' => Some(1),
+        b'G' => Some(2),
+        b'T' => Some(3),
+        _ => None,
+    }
 }
 
 fn complement_base(base: u8) -> u8 {

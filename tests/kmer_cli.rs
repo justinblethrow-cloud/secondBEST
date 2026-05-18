@@ -226,6 +226,7 @@ fn intervals_kmer_cli_counts_mismatches_and_indels() -> Result<(), Box<dyn Error
         .arg("--no-per-aln-stats")
         .arg("--no-feature-qual-score-stats")
         .arg("--kmer-position-stats")
+        .arg("--kmer-advanced-stats")
         .arg("--record-batch-size")
         .arg("1")
         .arg("--bam-reader-threads")
@@ -287,6 +288,18 @@ fn intervals_kmer_cli_counts_mismatches_and_indels() -> Result<(), Box<dyn Error
         "{}.summary_kmer_position_profile_stats.csv",
         output_prefix.display()
     ));
+    let substitution_summary_path = PathBuf::from(format!(
+        "{}.summary_kmer_substitution_stats.csv",
+        output_prefix.display()
+    ));
+    let substitution_profile_summary_path = PathBuf::from(format!(
+        "{}.summary_kmer_substitution_profile_stats.csv",
+        output_prefix.display()
+    ));
+    let strand_summary_path = PathBuf::from(format!(
+        "{}.summary_kmer_strand_stats.csv",
+        output_prefix.display()
+    ));
     let position_summary = fs::read_to_string(position_summary_path)?;
     let position_rows = parse_kmer_position_summary(&position_summary);
 
@@ -312,6 +325,21 @@ fn intervals_kmer_cli_counts_mismatches_and_indels() -> Result<(), Box<dyn Error
     assert!(position_profile_summary
         .lines()
         .any(|line| line.starts_with("3,1,C,1,2,0.500000")));
+
+    let substitution_summary = fs::read_to_string(substitution_summary_path)?;
+    assert!(substitution_summary
+        .lines()
+        .any(|line| line.starts_with("3,ACG,1,C,A,1,")));
+
+    let substitution_profile_summary = fs::read_to_string(substitution_profile_summary_path)?;
+    assert!(substitution_profile_summary
+        .lines()
+        .any(|line| line.starts_with("3,1,C,A,1,2,1,")));
+
+    let strand_summary = fs::read_to_string(strand_summary_path)?;
+    assert!(strand_summary
+        .lines()
+        .any(|line| line.starts_with("3,ACG,forward,2,")));
 
     Ok(())
 }

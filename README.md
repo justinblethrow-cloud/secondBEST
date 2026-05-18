@@ -48,6 +48,13 @@ checks, and candidate proof statements. The full usage guide includes an example
 matrix and the current recommended high-core setting. See
 `docs/kmer_benchmarks.md` for the current full-downsample benchmark notes.
 
+### K-mer Exploration
+Use `scripts/kmer_explore.py` on one or more BEST output prefixes to generate
+scientific k-mer reports covering context enrichment, quality calibration,
+homopolymer phase, motif discovery, replicate reliability, strand asymmetry, and
+substitution spectra when advanced k-mer outputs are available. See
+`docs/kmer_exploration.md` for the workflow and output descriptions.
+
 ### Formatting
 ```
 cargo fmt

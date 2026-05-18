@@ -54,6 +54,9 @@ const FEATURE_STATS_NAME: &str = "summary_feature_stats.csv";
 const KMER_STATS_NAME: &str = "summary_kmer_stats.csv";
 const KMER_LENGTH_STATS_NAME: &str = "summary_kmer_length_stats.csv";
 const KMER_CONTEXT_STATS_NAME: &str = "summary_kmer_context_stats.csv";
+const KMER_STRAND_STATS_NAME: &str = "summary_kmer_strand_stats.csv";
+const KMER_SUBSTITUTION_STATS_NAME: &str = "summary_kmer_substitution_stats.csv";
+const KMER_SUBSTITUTION_PROFILE_STATS_NAME: &str = "summary_kmer_substitution_profile_stats.csv";
 const KMER_POSITION_STATS_NAME: &str = "summary_kmer_position_stats.csv";
 const KMER_POSITION_PROFILE_STATS_NAME: &str = "summary_kmer_position_profile_stats.csv";
 const CIGAR_STATS_NAME: &str = "summary_cigar_stats.csv";
@@ -72,6 +75,7 @@ fn run(
     output_per_aln_stats: bool,
     feature_qual_score_stats: bool,
     kmer_position_stats: bool,
+    kmer_advanced_stats: bool,
     record_batch_size: usize,
     bam_reader_threads: usize,
 ) {
@@ -160,6 +164,7 @@ fn run(
                     &bin_types,
                     feature_qual_score_stats,
                     kmer_position_stats,
+                    kmer_advanced_stats,
                     if use_optimized_kmer {
                         Some(&optimized_kmer_lens)
                     } else {
@@ -198,6 +203,7 @@ fn run(
                     &bin_types,
                     feature_qual_score_stats,
                     kmer_position_stats,
+                    kmer_advanced_stats,
                     if use_optimized_kmer {
                         Some(&optimized_kmer_lens)
                     } else {
@@ -228,6 +234,19 @@ fn run(
         write_summary(k.kmer_summary(), &stats_prefix, KMER_STATS_NAME);
         write_summary(k.length_summary(), &stats_prefix, KMER_LENGTH_STATS_NAME);
         write_summary(k.context_summary(), &stats_prefix, KMER_CONTEXT_STATS_NAME);
+        if kmer_advanced_stats {
+            write_summary(k.strand_summary(), &stats_prefix, KMER_STRAND_STATS_NAME);
+            write_summary(
+                k.substitution_summary(),
+                &stats_prefix,
+                KMER_SUBSTITUTION_STATS_NAME,
+            );
+            write_summary(
+                k.substitution_profile_summary(),
+                &stats_prefix,
+                KMER_SUBSTITUTION_PROFILE_STATS_NAME,
+            );
+        }
         if kmer_position_stats {
             write_summary(
                 k.position_summary(),
@@ -414,6 +433,7 @@ impl SummaryAccumulator {
         bin_types: &[BinType],
         feature_qual_score_stats: bool,
         kmer_position_stats: bool,
+        kmer_advanced_stats: bool,
         optimized_kmer_lens: Option<&[usize]>,
     ) -> Self {
         Self {
@@ -428,7 +448,12 @@ impl SummaryAccumulator {
                 None
             },
             kmer_summary: optimized_kmer_lens.map(|lens| {
-                KmerSummary::new(name_column.clone(), lens.to_vec(), kmer_position_stats)
+                KmerSummary::new(
+                    name_column.clone(),
+                    lens.to_vec(),
+                    kmer_position_stats,
+                    kmer_advanced_stats,
+                )
             }),
             cigar_summary: CigarLenSummary::new(name_column.clone()),
             bin_summary: if bin_types.is_empty() {
@@ -530,6 +555,7 @@ fn main() {
         !args.no_per_aln_stats,
         !args.no_feature_qual_score_stats,
         args.kmer_position_stats,
+        args.kmer_advanced_stats,
         args.record_batch_size,
         args.bam_reader_threads,
     );
@@ -636,6 +662,14 @@ struct Args {
     /// This adds per-offset error counts within each read-oriented k-mer.
     #[clap(long)]
     kmer_position_stats: bool,
+
+    /// Write strand and substitution spectrum summaries for optimized k-mer runs.
+    ///
+    /// This adds summary_kmer_strand_stats.csv,
+    /// summary_kmer_substitution_stats.csv, and
+    /// summary_kmer_substitution_profile_stats.csv.
+    #[clap(long)]
+    kmer_advanced_stats: bool,
 
     /// Number of records to hand to each Rayon task.
     ///
