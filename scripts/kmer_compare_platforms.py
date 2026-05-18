@@ -77,6 +77,12 @@ def parse_args() -> argparse.Namespace:
         default=55,
         help="Hexbin grid size for density plots",
     )
+    parser.add_argument(
+        "--qv-error-floor",
+        type=float,
+        default=1e-6,
+        help="Minimum error rate used when converting zero rates to pseudo-QV",
+    )
     args = parser.parse_args()
     if args.min_intervals < 0:
         parser.error("--min-intervals must be nonnegative")
@@ -84,6 +90,8 @@ def parse_args() -> argparse.Namespace:
         parser.error("--top-n must be positive")
     if args.gridsize <= 0:
         parser.error("--gridsize must be positive")
+    if args.qv_error_floor <= 0.0 or args.qv_error_floor >= 1.0:
+        parser.error("--qv-error-floor must be greater than 0 and less than 1")
     args.formats = [item.strip().lower() for item in args.formats.split(",") if item.strip()]
     if not args.formats:
         parser.error("--formats must include at least one format")
@@ -123,6 +131,7 @@ def load_joined(
     csv_name: str,
     key_field: str,
     min_intervals: int,
+    qv_error_floor: float,
 ) -> list[dict[str, object]]:
     left_rows = {
         row[key_field]: row
@@ -140,6 +149,8 @@ def load_joined(
         right = right_rows[key]
         left_error = f(left, "error_rate")
         right_error = f(right, "error_rate")
+        left_qv = pseudo_qv(left_error, qv_error_floor)
+        right_qv = pseudo_qv(right_error, qv_error_floor)
         joined.append(
             {
                 "key": key,
@@ -147,13 +158,20 @@ def load_joined(
                 "right": right,
                 "left_error_rate": left_error,
                 "right_error_rate": right_error,
+                "left_pseudo_qv": left_qv,
+                "right_pseudo_qv": right_qv,
                 "left_error_events_per_interval": optional_error_class_sum(left),
                 "right_error_events_per_interval": optional_error_class_sum(right),
                 "delta_right_minus_left": right_error - left_error,
                 "log2_right_left_error_ratio": log2_ratio(right_error, left_error),
+                "delta_right_minus_left_pseudo_qv": right_qv - left_qv,
             }
         )
     return joined
+
+
+def pseudo_qv(error_rate: float, qv_error_floor: float) -> float:
+    return -10.0 * math.log10(max(error_rate, qv_error_floor))
 
 
 def log2_ratio(numerator: float, denominator: float) -> float:
@@ -180,12 +198,19 @@ def plot_hexbin(
     left_label: str,
     right_label: str,
     gridsize: int,
-    value_field: str,
     axis_label: str,
 ) -> list[Path]:
-    x_values = [100.0 * float(row[f"left_{value_field}"]) for row in joined]
-    y_values = [100.0 * float(row[f"right_{value_field}"]) for row in joined]
-    axis_max = max(x_values + y_values) * 1.04 if joined else 1.0
+    x_values = [float(row["left_pseudo_qv"]) for row in joined]
+    y_values = [float(row["right_pseudo_qv"]) for row in joined]
+    if joined:
+        axis_min = min(x_values + y_values)
+        axis_max = max(x_values + y_values)
+        padding = max(1.0, 0.06 * (axis_max - axis_min))
+        axis_min = max(0.0, axis_min - padding)
+        axis_max += padding
+    else:
+        axis_min = 0.0
+        axis_max = 1.0
 
     fig, ax = plt.subplots(figsize=(7.4, 6.2))
     hb = None
@@ -208,12 +233,13 @@ def plot_hexbin(
             transform=ax.transAxes,
             color="#344054",
         )
-    ax.plot([0, axis_max], [0, axis_max], linestyle="--", linewidth=1, color="#475467")
-    ax.set_xlim(0, axis_max)
-    ax.set_ylim(0, axis_max)
+    ax.plot([axis_min, axis_max], [axis_min, axis_max], linestyle="--", linewidth=1, color="#475467")
+    ax.set_xlim(axis_min, axis_max)
+    ax.set_ylim(axis_min, axis_max)
     ax.set_title(title, loc="left", fontsize=12, fontweight="bold")
-    ax.set_xlabel(f"{left_label} {axis_label} (%)")
-    ax.set_ylabel(f"{right_label} {axis_label} (%)")
+    ax.set_xlabel(f"{left_label} {axis_label}")
+    ax.set_ylabel(f"{right_label} {axis_label}")
+    ax.set_aspect("equal", adjustable="box")
     ax.grid(True, color="#D8DEE9", linewidth=0.6, alpha=0.8)
     ax.spines["top"].set_visible(False)
     ax.spines["right"].set_visible(False)
@@ -236,6 +262,9 @@ def write_joined_table(
         f"{right_label}_intervals",
         f"{left_label}_error_rate",
         f"{right_label}_error_rate",
+        f"{left_label}_pseudo_qv",
+        f"{right_label}_pseudo_qv",
+        "delta_right_minus_left_pseudo_qv",
         "delta_right_minus_left",
         "log2_right_left_error_ratio",
         f"{left_label}_error_events_per_interval",
@@ -255,6 +284,9 @@ def write_joined_table(
                     f"{right_label}_intervals": i(right, "intervals"),
                     f"{left_label}_error_rate": f"{float(row['left_error_rate']):.8f}",
                     f"{right_label}_error_rate": f"{float(row['right_error_rate']):.8f}",
+                    f"{left_label}_pseudo_qv": f"{float(row['left_pseudo_qv']):.3f}",
+                    f"{right_label}_pseudo_qv": f"{float(row['right_pseudo_qv']):.3f}",
+                    "delta_right_minus_left_pseudo_qv": f"{float(row['delta_right_minus_left_pseudo_qv']):.3f}",
                     "delta_right_minus_left": f"{float(row['delta_right_minus_left']):.8f}",
                     "log2_right_left_error_ratio": f"{float(row['log2_right_left_error_ratio']):.8f}",
                     f"{left_label}_error_events_per_interval": format_optional_float(
@@ -307,6 +339,7 @@ def write_manifest(
         1 for row in raw_joined if float(row["right_error_rate"]) > float(row["left_error_rate"])
     )
     median_ratio = median([float(row["log2_right_left_error_ratio"]) for row in raw_joined])
+    median_delta_qv = median([float(row["delta_right_minus_left_pseudo_qv"]) for row in raw_joined])
     lines = [
         "# K-mer Platform Comparison",
         "",
@@ -323,11 +356,12 @@ def write_manifest(
         f"- Raw k-mers with higher `{left_label}` error rate: `{left_higher}`",
         f"- Raw k-mers with higher `{right_label}` error rate: `{right_higher}`",
         f"- Median log2 `{right_label}`/`{left_label}` error-rate ratio: `{median_ratio:.3f}`",
+        f"- Median `{right_label}` - `{left_label}` pseudo-QV delta: `{median_delta_qv:.3f}`",
         "",
         "## Figures",
         "",
-        f"- Raw k-mer error-rate hexbin: {', '.join(f'`{path.name}`' for path in raw_paths)}",
-        f"- Reverse-complement-collapsed error-rate hexbin: {', '.join(f'`{path.name}`' for path in rc_paths)}",
+        f"- Raw k-mer pseudo-QV hexbin: {', '.join(f'`{path.name}`' for path in raw_paths)}",
+        f"- Reverse-complement-collapsed pseudo-QV hexbin: {', '.join(f'`{path.name}`' for path in rc_paths)}",
         "",
         "## Tables",
         "",
@@ -336,7 +370,8 @@ def write_manifest(
         "## Presentation Builder Notes",
         "",
         f"- Use the raw k-mer hexbin as the main {left_label}-vs-{right_label} comparison slide.",
-        "- The diagonal is equal error rate; points or density above it have higher error in the right platform, below it higher error in the left platform.",
+        "- Axes are pseudo-QV scores computed as `-10 * log10(error_rate)`, capped by the configured error floor for zero-rate contexts.",
+        "- The diagonal is equal pseudo-QV; points or density above it have higher pseudo-QV and lower error in the right platform, below it higher pseudo-QV and lower error in the left platform.",
         "- Use the reverse-complement-collapsed hexbin to show whether the platform contrast survives orientation collapsing.",
         "- Pair the hexbin slide with the outlier CSV to annotate a few concrete k-mers only after the density story is clear.",
     ]
@@ -359,7 +394,12 @@ def main() -> int:
     left_dir = Path(args.left_dir)
     right_dir = Path(args.right_dir)
     raw_joined = load_joined(
-        left_dir, right_dir, "kmer_enrichment.csv", "kmer", args.min_intervals
+        left_dir,
+        right_dir,
+        "kmer_enrichment.csv",
+        "kmer",
+        args.min_intervals,
+        args.qv_error_floor,
     )
     rc_joined = load_joined(
         left_dir,
@@ -367,6 +407,7 @@ def main() -> int:
         "rc_collapsed_kmers.csv",
         "canonical_kmer",
         args.min_intervals,
+        args.qv_error_floor,
     )
 
     raw_paths = plot_hexbin(
@@ -378,8 +419,7 @@ def main() -> int:
         args.left_label,
         args.right_label,
         args.gridsize,
-        "error_rate",
-        "error rate",
+        "pseudo-QV (-10 log10 error rate)",
     )
     rc_paths = plot_hexbin(
         rc_joined,
@@ -390,8 +430,7 @@ def main() -> int:
         args.left_label,
         args.right_label,
         args.gridsize,
-        "error_rate",
-        "RC-collapsed error rate",
+        "RC-collapsed pseudo-QV (-10 log10 error rate)",
     )
 
     joined_path = out_dir / "platform_kmer_joined.csv"

@@ -204,8 +204,9 @@ python3 scripts/kmer_compare_platforms.py \
 ```
 
 This writes hexbin plots for every shared k-mer and for
-reverse-complement-collapsed contexts, plus joined and outlier CSVs for
-annotating platform-specific contexts.
+reverse-complement-collapsed contexts. Hexbin axes are pseudo-QV scores
+computed as `-10 * log10(error_rate)`. Joined and outlier CSVs include both raw
+error rates and pseudo-QV values for annotating platform-specific contexts.
 
 ## Help Message:
 ```

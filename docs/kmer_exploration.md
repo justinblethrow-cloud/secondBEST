@@ -86,10 +86,13 @@ python3 scripts/kmer_compare_platforms.py \
 
 The comparison script joins shared k-mers that pass the support threshold in
 both datasets. It writes one hexbin for raw k-mers and one for
-reverse-complement-collapsed contexts, each with an equality diagonal. Points
-below the diagonal have higher error in the left dataset; points above it have
-higher error in the right dataset. Joined and outlier CSVs are written alongside
-the figures so selected contexts can be annotated in a slide or manuscript.
+reverse-complement-collapsed contexts, each with pseudo-QV axes computed as
+`-10 * log10(error_rate)`. The default `--qv-error-floor 1e-6` caps zero-rate
+contexts at Q60. The equality diagonal marks equal pseudo-QV; points above it
+have higher pseudo-QV and lower error in the right dataset, while points below
+it have higher pseudo-QV and lower error in the left dataset. Joined and outlier
+CSVs are written alongside the figures so selected contexts can be annotated in
+a slide or manuscript.
 
 ## Outputs
 
@@ -152,14 +155,14 @@ The examples below use the default `nanopore` figure prefix. If
 
 ## Platform Comparison Outputs
 
-- `platform_kmer_error_hexbin`: raw shared k-mer error-rate hexbin.
+- `platform_kmer_error_hexbin`: raw shared k-mer pseudo-QV hexbin.
 - `platform_rc_collapsed_error_hexbin`: reverse-complement-collapsed shared
-  context error-rate hexbin.
+  context pseudo-QV hexbin.
 - `platform_kmer_joined.csv` and `platform_kmer_outliers.csv`: raw k-mer
-  comparison tables.
+  comparison tables with error-rate and pseudo-QV columns.
 - `platform_rc_collapsed_joined.csv` and
   `platform_rc_collapsed_outliers.csv`: reverse-complement-collapsed comparison
-  tables, including per-error-class event rates when available.
+  tables, including pseudo-QV and per-error-class event rates when available.
 - `platform_comparison_manifest.md`: compact summary with figure names and
   presentation-builder notes.
 
